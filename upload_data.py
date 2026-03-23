@@ -34,7 +34,7 @@ for file in tqdm(json_files, desc="Uploading Matches", unit="match"):
     match_data = {
         'match_id': match_id,
         'match_date': info.get('dates', [None])[0],
-        'season': info.get('season') or str(info.get('dates', [''])[0])[:4],
+        'season': str(info.get('dates', [''])[0])[:4],
         'city': info.get('city'),
         'venue': info.get('venue'),
         'team1': teams[0] if len(teams) > 0 else None,
