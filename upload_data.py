@@ -90,6 +90,7 @@ def run_sync():
             bowl_team = teams[1] if teams[0] == bat_team else teams[0]
             
             for over_data in inning.get('overs', []):
+                current_over = over_data.get('over')
                 for ball_idx, delivery in enumerate(over_data.get('deliveries', [])):
                     runs = delivery.get('runs', {})
                     wickets = delivery.get('wickets', [{}])[0] if 'wickets' in delivery else {}
@@ -98,7 +99,7 @@ def run_sync():
                     delivery_list.append({
                         'match_id': match_id,
                         'inning': inning_idx + 1,
-                        'over': over_data.get('over'),
+                        'over': current_over,
                         'ball': ball_idx + 1,
                         'batting_team': bat_team,
                         'bowling_team': bowl_team,
