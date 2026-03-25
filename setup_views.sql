@@ -111,3 +111,63 @@ CREATE INDEX idx_mv_bowler_name ON view_bowler_master(player);
 -- 5. INITIAL REFRESH
 REFRESH MATERIALIZED VIEW view_batter_master;
 REFRESH MATERIALIZED VIEW view_bowler_master;
+
+
+DROP MATERIALIZED VIEW IF EXISTS view_player_race_matrix;
+
+CREATE MATERIALIZED VIEW view_player_race_matrix AS
+WITH all_matches AS (
+    SELECT match_id, ROW_NUMBER() OVER (ORDER BY match_date, match_id) as global_num
+    FROM matches
+),
+match_scores AS (
+    SELECT batter as player, match_id, SUM(runs_batter) as runs
+    FROM deliveries GROUP BY batter, match_id
+),
+cumulative_scores AS (
+    -- Calculate the running total for every player for every match
+    SELECT 
+        p.batter as player,
+        m.global_num,
+        SUM(COALESCE(ms.runs, 0)) OVER (PARTITION BY p.batter ORDER BY m.global_num) as total
+    FROM (SELECT DISTINCT batter FROM deliveries) p
+    CROSS JOIN all_matches m
+    LEFT JOIN match_scores ms ON p.batter = ms.player AND m.match_id = ms.match_id
+)
+-- "Pivot" the data: One row per player, one array containing all 1,169 match totals
+SELECT 
+    player,
+    array_agg(total ORDER BY global_num) as history
+FROM cumulative_scores
+GROUP BY player;
+
+REFRESH MATERIALIZED VIEW view_player_race_matrix;
+
+DROP MATERIALIZED VIEW IF EXISTS view_bowler_race_matrix;
+
+CREATE MATERIALIZED VIEW view_bowler_race_matrix AS
+WITH all_matches AS (
+    SELECT match_id, ROW_NUMBER() OVER (ORDER BY match_date, match_id) as global_num
+    FROM matches
+),
+match_wickets AS (
+    SELECT bowler as player, match_id, 
+           COUNT(CASE WHEN wicket_type IN ('bowled', 'caught', 'lbw', 'stumped', 'caught and bowled') THEN 1 END) as wkts
+    FROM deliveries GROUP BY bowler, match_id
+),
+cumulative_wickets AS (
+    SELECT 
+        p.bowler as player,
+        m.global_num,
+        SUM(COALESCE(mw.wkts, 0)) OVER (PARTITION BY p.bowler ORDER BY m.global_num) as total
+    FROM (SELECT DISTINCT bowler FROM deliveries) p
+    CROSS JOIN all_matches m
+    LEFT JOIN match_wickets mw ON p.bowler = mw.player AND m.match_id = mw.match_id
+)
+SELECT 
+    player,
+    array_agg(total ORDER BY global_num) as history
+FROM cumulative_wickets
+GROUP BY player;
+
+REFRESH MATERIALIZED VIEW view_bowler_race_matrix;
