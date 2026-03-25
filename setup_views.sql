@@ -1,15 +1,14 @@
 -- ==========================================
--- IPL MASTER CLEANUP & VIEW RECREATION
+-- IPL MASTER CLEANUP & MATERIALIZED VIEWS
 -- ==========================================
 
--- 1. STANDARDIZE TEAM NAMES (Historical & Inconsistencies)
+-- 1. STANDARDIZE TEAM NAMES
 UPDATE matches
 SET 
     team1 = CASE 
         WHEN team1 IN ('Royal Challengers Bangalore', 'R C Bangalore') THEN 'Royal Challengers Bengaluru'
         WHEN team1 IN ('Kings XI Punjab', 'KXIP') THEN 'Punjab Kings'
         WHEN team1 = 'Delhi Daredevils' THEN 'Delhi Capitals'
-        WHEN team1 = 'Deccan Chargers' THEN 'Sunrisers Hyderabad' -- Optional: depending on if you want to merge them
         WHEN team1 = 'Rising Pune Supergiants' THEN 'Rising Pune Supergiant'
         ELSE team1 
     END,
@@ -17,7 +16,6 @@ SET
         WHEN team2 IN ('Royal Challengers Bangalore', 'R C Bangalore') THEN 'Royal Challengers Bengaluru'
         WHEN team2 IN ('Kings XI Punjab', 'KXIP') THEN 'Punjab Kings'
         WHEN team2 = 'Delhi Daredevils' THEN 'Delhi Capitals'
-        WHEN team2 = 'Deccan Chargers' THEN 'Sunrisers Hyderabad'
         WHEN team2 = 'Rising Pune Supergiants' THEN 'Rising Pune Supergiant'
         ELSE team2 
     END,
@@ -25,7 +23,6 @@ SET
         WHEN winner IN ('Royal Challengers Bangalore', 'R C Bangalore') THEN 'Royal Challengers Bengaluru'
         WHEN winner IN ('Kings XI Punjab', 'KXIP') THEN 'Punjab Kings'
         WHEN winner = 'Delhi Daredevils' THEN 'Delhi Capitals'
-        WHEN winner = 'Deccan Chargers' THEN 'Sunrisers Hyderabad'
         WHEN winner = 'Rising Pune Supergiants' THEN 'Rising Pune Supergiant'
         ELSE winner 
     END;
@@ -36,7 +33,6 @@ SET
         WHEN batting_team IN ('Royal Challengers Bangalore', 'R C Bangalore') THEN 'Royal Challengers Bengaluru'
         WHEN batting_team = 'Kings XI Punjab' THEN 'Punjab Kings'
         WHEN batting_team = 'Delhi Daredevils' THEN 'Delhi Capitals'
-        WHEN batting_team = 'Deccan Chargers' THEN 'Sunrisers Hyderabad'
         WHEN batting_team = 'Rising Pune Supergiants' THEN 'Rising Pune Supergiant'
         ELSE batting_team 
     END,
@@ -44,7 +40,6 @@ SET
         WHEN bowling_team IN ('Royal Challengers Bangalore', 'R C Bangalore') THEN 'Royal Challengers Bengaluru'
         WHEN bowling_team = 'Kings XI Punjab' THEN 'Punjab Kings'
         WHEN bowling_team = 'Delhi Daredevils' THEN 'Delhi Capitals'
-        WHEN bowling_team = 'Deccan Chargers' THEN 'Sunrisers Hyderabad'
         WHEN bowling_team = 'Rising Pune Supergiants' THEN 'Rising Pune Supergiant'
         ELSE bowling_team 
     END;
@@ -60,24 +55,15 @@ SET venue = CASE
     WHEN venue ILIKE '%Narendra Modi%' OR venue ILIKE '%Motera%' THEN 'Narendra Modi Stadium, Ahmedabad'
     WHEN venue ILIKE '%Eden Gardens%' THEN 'Eden Gardens, Kolkata'
     WHEN venue ILIKE '%IS Bindra%' OR venue ILIKE '%Punjab Cricket Association%' THEN 'IS Bindra Stadium, Mohali'
-    WHEN venue ILIKE '%Dharamsala%' OR venue ILIKE '%Himachal Pradesh%' THEN 'HPCA Stadium, Dharamsala'
     ELSE venue 
 END;
 
--- 3. RECREATE MASTER VIEWS
--- We use CASCADE to ensure that any old dependent views are also refreshed
-DROP VIEW IF EXISTS view_batter_master CASCADE;
-DROP VIEW IF EXISTS view_bowler_master CASCADE;
-DROP VIEW IF EXISTS leaderboard_awards CASCADE;
+-- 3. RECREATE MASTER VIEWS (MATERIALIZED FOR PERFORMANCE)
+DROP MATERIALIZED VIEW IF EXISTS view_batter_master CASCADE;
+DROP MATERIALIZED VIEW IF EXISTS view_bowler_master CASCADE;
 
--- Awards View
-CREATE VIEW leaderboard_awards AS
-SELECT player_of_match AS player, COUNT(*) AS mom_awards
-FROM matches
-GROUP BY player_of_match;
-
--- Master Batting View
-CREATE VIEW view_batter_master AS
+-- Master Batting Materialized View
+CREATE MATERIALIZED VIEW view_batter_master AS
 WITH match_stats AS (
     SELECT batter, match_id, SUM(runs_batter) as runs_in_match
     FROM deliveries GROUP BY batter, match_id
@@ -93,15 +79,13 @@ SELECT
     SUM(CASE WHEN d.runs_batter = 4 THEN 1 ELSE 0 END) AS "4s",
     SUM(CASE WHEN d.runs_batter = 6 THEN 1 ELSE 0 END) AS "6s",
     COUNT(DISTINCT CASE WHEN ms.runs_in_match >= 100 THEN d.match_id END) AS "100s",
-    COUNT(DISTINCT CASE WHEN ms.runs_in_match >= 50 AND ms.runs_in_match < 100 THEN d.match_id END) AS "50s",
-    COALESCE(a.mom_awards, 0) AS mom_awards
+    COUNT(DISTINCT CASE WHEN ms.runs_in_match >= 50 AND ms.runs_in_match < 100 THEN d.match_id END) AS "50s"
 FROM deliveries d
 LEFT JOIN match_stats ms ON d.batter = ms.batter AND d.match_id = ms.match_id
-LEFT JOIN leaderboard_awards a ON d.batter = a.player
-GROUP BY d.batter, d.batting_team, a.mom_awards;
+GROUP BY d.batter, d.batting_team;
 
--- Master Bowling View
-CREATE VIEW view_bowler_master AS
+-- Master Bowling Materialized View
+CREATE MATERIALIZED VIEW view_bowler_master AS
 WITH match_wickets AS (
     SELECT bowler, match_id, 
            COUNT(CASE WHEN wicket_type IN ('bowled', 'caught', 'lbw', 'stumped', 'caught and bowled') THEN 1 END) as w_in_match
@@ -119,3 +103,11 @@ SELECT
 FROM deliveries d
 LEFT JOIN match_wickets mw ON d.bowler = mw.bowler AND d.match_id = mw.match_id
 GROUP BY d.bowler, d.bowling_team;
+
+-- 4. ADD INDEXES FOR LIGHTNING SPEED
+CREATE INDEX idx_mv_batter_name ON view_batter_master(player);
+CREATE INDEX idx_mv_bowler_name ON view_bowler_master(player);
+
+-- 5. INITIAL REFRESH
+REFRESH MATERIALIZED VIEW view_batter_master;
+REFRESH MATERIALIZED VIEW view_bowler_master;
