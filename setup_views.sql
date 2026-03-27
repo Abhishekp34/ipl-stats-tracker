@@ -1,5 +1,5 @@
 -- ==========================================
--- IPL MASTER CLEANUP & MATERIALIZED VIEWS
+-- IPL MASTER CLEANUP & OPTIMIZED VIEWS
 -- ==========================================
 
 -- 1. STANDARDIZE TEAM NAMES
@@ -58,42 +58,73 @@ SET venue = CASE
     ELSE venue 
 END;
 
--- 3. RECREATE MASTER VIEWS (MATERIALIZED FOR PERFORMANCE)
+-- 3. GLOBAL BATTING MASTER (Corrected Formulas)
 DROP MATERIALIZED VIEW IF EXISTS view_batter_master CASCADE;
-DROP MATERIALIZED VIEW IF EXISTS view_bowler_master CASCADE;
 
--- Master Batting Materialized View
 CREATE MATERIALIZED VIEW view_batter_master AS
-WITH match_stats AS (
-    SELECT batter, match_id, SUM(runs_batter) as runs_in_match
-    FROM deliveries GROUP BY batter, match_id
+WITH player_latest_team AS (
+    SELECT DISTINCT ON (batter) 
+        batter, 
+        batting_team as current_team
+    FROM deliveries d
+    JOIN matches m ON d.match_id = m.match_id
+    ORDER BY batter, m.match_date DESC, m.match_id DESC
+),
+match_by_match_scores AS (
+    SELECT 
+        batter, 
+        match_id, 
+        SUM(runs_batter) as total_runs_in_match,
+        MAX(CASE WHEN player_out = batter THEN 1 ELSE 0 END) as was_out_in_match
+    FROM deliveries 
+    GROUP BY batter, match_id
+),
+highest_score_per_player AS (
+    SELECT DISTINCT ON (batter)
+        batter,
+        total_runs_in_match,
+        CASE WHEN was_out_in_match = 0 THEN total_runs_in_match::text || '*' ELSE total_runs_in_match::text END as hs_formatted
+    FROM match_by_match_scores
+    ORDER BY batter, total_runs_in_match DESC
 )
 SELECT 
     d.batter AS player,
-    d.batting_team AS team,
+    lt.current_team AS team,
     COUNT(DISTINCT d.match_id) AS mat,
     SUM(d.runs_batter) AS runs,
-    MAX(d.runs_batter) AS hs,
-    ROUND(SUM(d.runs_batter)::numeric / NULLIF(COUNT(DISTINCT d.match_id) - COUNT(CASE WHEN d.player_out = d.batter THEN 1 END), 0), 2) AS avg,
-    ROUND((SUM(d.runs_batter)::numeric / NULLIF(COUNT(d.ball), 0)) * 100, 2) AS sr,
+    hsp.hs_formatted AS hs, 
+    ROUND(SUM(d.runs_batter)::numeric / NULLIF(SUM(ms.was_out_in_match), 0), 2) AS avg,
+    ROUND((SUM(d.runs_batter)::numeric / NULLIF(COUNT(CASE WHEN extra_type NOT IN ('wides') OR extra_type IS NULL THEN 1 END), 0)) * 100, 2) AS sr,
     SUM(CASE WHEN d.runs_batter = 4 THEN 1 ELSE 0 END) AS "4s",
     SUM(CASE WHEN d.runs_batter = 6 THEN 1 ELSE 0 END) AS "6s",
-    COUNT(DISTINCT CASE WHEN ms.runs_in_match >= 100 THEN d.match_id END) AS "100s",
-    COUNT(DISTINCT CASE WHEN ms.runs_in_match >= 50 AND ms.runs_in_match < 100 THEN d.match_id END) AS "50s"
+    COUNT(DISTINCT CASE WHEN ms.total_runs_in_match >= 100 THEN d.match_id END) AS "100s",
+    COUNT(DISTINCT CASE WHEN ms.total_runs_in_match >= 50 AND ms.total_runs_in_match < 100 THEN d.match_id END) AS "50s"
 FROM deliveries d
-LEFT JOIN match_stats ms ON d.batter = ms.batter AND d.match_id = ms.match_id
-GROUP BY d.batter, d.batting_team;
+JOIN player_latest_team lt ON d.batter = lt.batter
+JOIN highest_score_per_player hsp ON d.batter = hsp.batter
+LEFT JOIN match_by_match_scores ms ON d.batter = ms.batter AND d.match_id = ms.match_id
+GROUP BY d.batter, lt.current_team, hsp.hs_formatted;
 
--- Master Bowling Materialized View
+-- 4. GLOBAL BOWLING MASTER
+DROP MATERIALIZED VIEW IF EXISTS view_bowler_master CASCADE;
+
 CREATE MATERIALIZED VIEW view_bowler_master AS
-WITH match_wickets AS (
+WITH player_latest_team AS (
+    SELECT DISTINCT ON (bowler) 
+        bowler, 
+        bowling_team as current_team
+    FROM deliveries d
+    JOIN matches m ON d.match_id = m.match_id
+    ORDER BY bowler, m.match_date DESC, m.match_id DESC
+),
+match_wickets AS (
     SELECT bowler, match_id, 
            COUNT(CASE WHEN wicket_type IN ('bowled', 'caught', 'lbw', 'stumped', 'caught and bowled') THEN 1 END) as w_in_match
     FROM deliveries GROUP BY bowler, match_id
 )
 SELECT 
     d.bowler AS player,
-    d.bowling_team AS team,
+    lt.current_team AS team,
     COUNT(DISTINCT d.match_id) AS mat,
     COUNT(CASE WHEN d.wicket_type IN ('bowled', 'caught', 'lbw', 'stumped', 'caught and bowled') THEN 1 END) AS wkts,
     ROUND((SUM(d.runs_total)::numeric / NULLIF(COUNT(d.ball), 0)) * 6, 2) AS econ,
@@ -101,18 +132,11 @@ SELECT
     COUNT(DISTINCT CASE WHEN mw.w_in_match = 4 THEN d.match_id END) AS "4w",
     COUNT(DISTINCT CASE WHEN mw.w_in_match >= 5 THEN d.match_id END) AS "5w"
 FROM deliveries d
+JOIN player_latest_team lt ON d.bowler = lt.bowler
 LEFT JOIN match_wickets mw ON d.bowler = mw.bowler AND d.match_id = mw.match_id
-GROUP BY d.bowler, d.bowling_team;
+GROUP BY d.bowler, lt.current_team;
 
--- 4. ADD INDEXES FOR LIGHTNING SPEED
-CREATE INDEX idx_mv_batter_name ON view_batter_master(player);
-CREATE INDEX idx_mv_bowler_name ON view_bowler_master(player);
-
--- 5. INITIAL REFRESH
-REFRESH MATERIALIZED VIEW view_batter_master;
-REFRESH MATERIALIZED VIEW view_bowler_master;
-
-
+-- 5. BATTING RACE MATRIX
 DROP MATERIALIZED VIEW IF EXISTS view_player_race_matrix;
 
 CREATE MATERIALIZED VIEW view_player_race_matrix AS
@@ -125,7 +149,6 @@ match_scores AS (
     FROM deliveries GROUP BY batter, match_id
 ),
 cumulative_scores AS (
-    -- Calculate the running total for every player for every match
     SELECT 
         p.batter as player,
         m.global_num,
@@ -134,15 +157,10 @@ cumulative_scores AS (
     CROSS JOIN all_matches m
     LEFT JOIN match_scores ms ON p.batter = ms.player AND m.match_id = ms.match_id
 )
--- "Pivot" the data: One row per player, one array containing all 1,169 match totals
-SELECT 
-    player,
-    array_agg(total ORDER BY global_num) as history
-FROM cumulative_scores
-GROUP BY player;
+SELECT player, array_agg(total ORDER BY global_num) as history
+FROM cumulative_scores GROUP BY player;
 
-REFRESH MATERIALIZED VIEW view_player_race_matrix;
-
+-- 6. BOWLING RACE MATRIX
 DROP MATERIALIZED VIEW IF EXISTS view_bowler_race_matrix;
 
 CREATE MATERIALIZED VIEW view_bowler_race_matrix AS
@@ -164,10 +182,14 @@ cumulative_wickets AS (
     CROSS JOIN all_matches m
     LEFT JOIN match_wickets mw ON p.bowler = mw.player AND m.match_id = mw.match_id
 )
-SELECT 
-    player,
-    array_agg(total ORDER BY global_num) as history
-FROM cumulative_wickets
-GROUP BY player;
+SELECT player, array_agg(total ORDER BY global_num) as history
+FROM cumulative_wickets GROUP BY player;
 
+-- 7. REFRESH & INDEXING
+REFRESH MATERIALIZED VIEW view_batter_master;
+REFRESH MATERIALIZED VIEW view_bowler_master;
+REFRESH MATERIALIZED VIEW view_player_race_matrix;
 REFRESH MATERIALIZED VIEW view_bowler_race_matrix;
+
+CREATE INDEX idx_batter_player ON view_batter_master(player);
+CREATE INDEX idx_bowler_player ON view_bowler_master(player);
