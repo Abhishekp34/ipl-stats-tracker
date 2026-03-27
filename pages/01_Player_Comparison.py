@@ -62,7 +62,7 @@ with tab1:
                 st.subheader(player)
                 st.metric("Total Runs", f"{int(p_data['runs']):,}") # Column renamed to 'runs'
                 st.metric("Avg / SR", f"{p_data['avg']} / {p_data['sr']}") # Renamed to 'avg' / 'sr'
-                st.write(f"**HS:** {int(p_data['hs'])} | **100s/50s:** {int(p_data['100s'])}/{int(p_data['50s'])}")
+                st.write(f"**HS:** {p_data['hs']} | **100s/50s:** {p_data['100s']}/{p_data['50s']}")
                 st.write(f"**4s/6s:** {int(p_data['4s'])}/{int(p_data['6s'])}")
 
         # Radar Chart for Batters
