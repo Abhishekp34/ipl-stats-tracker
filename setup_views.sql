@@ -58,68 +58,62 @@ SET venue = CASE
     ELSE venue 
 END;
 
--- 3. GLOBAL BATTING MASTER (Corrected Formulas)
+-- 3. GLOBAL BATTING MASTER (Corrected Formulas for Avg & HS)
 DROP MATERIALIZED VIEW IF EXISTS view_batter_master CASCADE;
 
 CREATE MATERIALIZED VIEW view_batter_master AS
 WITH player_latest_team AS (
-    SELECT DISTINCT ON (batter) 
-        batter, 
-        batting_team as current_team
-    FROM deliveries d
-    JOIN matches m ON d.match_id = m.match_id
+    SELECT DISTINCT ON (batter) batter, batting_team as current_team
+    FROM deliveries d JOIN matches m ON d.match_id = m.match_id
     ORDER BY batter, m.match_date DESC, m.match_id DESC
 ),
-match_by_match_scores AS (
+match_scores AS (
     SELECT 
-        batter, 
-        match_id, 
-        SUM(runs_batter) as total_runs_in_match,
-        MAX(CASE WHEN player_out = batter THEN 1 ELSE 0 END) as was_out_in_match
-    FROM deliveries 
-    GROUP BY batter, match_id
+        batter, match_id, SUM(runs_batter) as runs_in_match,
+        MAX(CASE WHEN player_out = batter THEN 1 ELSE 0 END) as was_dismissed
+    FROM deliveries GROUP BY batter, match_id
 ),
-highest_score_per_player AS (
+true_hs AS (
     SELECT DISTINCT ON (batter)
-        batter,
-        total_runs_in_match,
-        CASE WHEN was_out_in_match = 0 THEN total_runs_in_match::text || '*' ELSE total_runs_in_match::text END as hs_formatted
-    FROM match_by_match_scores
-    ORDER BY batter, total_runs_in_match DESC
+        batter, runs_in_match,
+        CASE WHEN was_dismissed = 0 THEN runs_in_match::text || '*' ELSE runs_in_match::text END as hs_final
+    FROM match_scores
+    ORDER BY batter, runs_in_match DESC, was_dismissed ASC
+),
+dismissals AS (
+    SELECT player_out as player, COUNT(*) as total_outs
+    FROM deliveries WHERE player_out IS NOT NULL GROUP BY player_out
 )
 SELECT 
     d.batter AS player,
     lt.current_team AS team,
     COUNT(DISTINCT d.match_id) AS mat,
     SUM(d.runs_batter) AS runs,
-    hsp.hs_formatted AS hs, 
-    ROUND(SUM(d.runs_batter)::numeric / NULLIF(SUM(ms.was_out_in_match), 0), 2) AS avg,
+    ths.hs_final AS hs, 
+    ROUND(SUM(d.runs_batter)::numeric / NULLIF(COALESCE(dis.total_outs, 0), 0), 2) AS avg,
     ROUND((SUM(d.runs_batter)::numeric / NULLIF(COUNT(CASE WHEN extra_type NOT IN ('wides') OR extra_type IS NULL THEN 1 END), 0)) * 100, 2) AS sr,
     SUM(CASE WHEN d.runs_batter = 4 THEN 1 ELSE 0 END) AS "4s",
     SUM(CASE WHEN d.runs_batter = 6 THEN 1 ELSE 0 END) AS "6s",
-    COUNT(DISTINCT CASE WHEN ms.total_runs_in_match >= 100 THEN d.match_id END) AS "100s",
-    COUNT(DISTINCT CASE WHEN ms.total_runs_in_match >= 50 AND ms.total_runs_in_match < 100 THEN d.match_id END) AS "50s"
+    COUNT(DISTINCT CASE WHEN ms.runs_in_match >= 100 THEN d.match_id END) AS "100s",
+    COUNT(DISTINCT CASE WHEN ms.runs_in_match >= 50 AND ms.runs_in_match < 100 THEN d.match_id END) AS "50s"
 FROM deliveries d
 JOIN player_latest_team lt ON d.batter = lt.batter
-JOIN highest_score_per_player hsp ON d.batter = hsp.batter
-LEFT JOIN match_by_match_scores ms ON d.batter = ms.batter AND d.match_id = ms.match_id
-GROUP BY d.batter, lt.current_team, hsp.hs_formatted;
+JOIN true_hs ths ON d.batter = ths.batter
+LEFT JOIN dismissals dis ON d.batter = dis.player
+LEFT JOIN match_scores ms ON d.batter = ms.batter AND d.match_id = ms.match_id
+GROUP BY d.batter, lt.current_team, ths.hs_final, dis.total_outs;
 
 -- 4. GLOBAL BOWLING MASTER
 DROP MATERIALIZED VIEW IF EXISTS view_bowler_master CASCADE;
 
 CREATE MATERIALIZED VIEW view_bowler_master AS
 WITH player_latest_team AS (
-    SELECT DISTINCT ON (bowler) 
-        bowler, 
-        bowling_team as current_team
-    FROM deliveries d
-    JOIN matches m ON d.match_id = m.match_id
+    SELECT DISTINCT ON (bowler) bowler, bowling_team as current_team
+    FROM deliveries d JOIN matches m ON d.match_id = m.match_id
     ORDER BY bowler, m.match_date DESC, m.match_id DESC
 ),
 match_wickets AS (
-    SELECT bowler, match_id, 
-           COUNT(CASE WHEN wicket_type IN ('bowled', 'caught', 'lbw', 'stumped', 'caught and bowled') THEN 1 END) as w_in_match
+    SELECT bowler, match_id, COUNT(CASE WHEN wicket_type IN ('bowled', 'caught', 'lbw', 'stumped', 'caught and bowled') THEN 1 END) as w_in_match
     FROM deliveries GROUP BY bowler, match_id
 )
 SELECT 
@@ -136,60 +130,58 @@ JOIN player_latest_team lt ON d.bowler = lt.bowler
 LEFT JOIN match_wickets mw ON d.bowler = mw.bowler AND d.match_id = mw.match_id
 GROUP BY d.bowler, lt.current_team;
 
--- 5. BATTING RACE MATRIX
+-- 5. TEAM RIVALRY MASTER
+DROP MATERIALIZED VIEW IF EXISTS view_team_rivalry_master CASCADE;
+
+CREATE MATERIALIZED VIEW view_team_rivalry_master AS
+WITH match_summaries AS (
+    SELECT 
+        CASE WHEN team1 < team2 THEN team1 ELSE team2 END as side_a,
+        CASE WHEN team1 < team2 THEN team2 ELSE team1 END as side_b,
+        COUNT(*) as total_matches,
+        COUNT(CASE WHEN winner = team1 THEN 1 END) as team1_wins,
+        COUNT(CASE WHEN winner = team2 THEN 1 END) as team2_wins
+    FROM matches GROUP BY side_a, side_b
+),
+batting_riv AS (
+    SELECT CASE WHEN batting_team < bowling_team THEN batting_team ELSE bowling_team END as sa,
+           CASE WHEN batting_team < bowling_team THEN bowling_team ELSE batting_team END as sb,
+           batter, SUM(runs_batter) as tr FROM deliveries GROUP BY sa, sb, batter
+),
+bowling_riv AS (
+    SELECT CASE WHEN batting_team < bowling_team THEN batting_team ELSE bowling_team END as sa,
+           CASE WHEN batting_team < bowling_team THEN bowling_team ELSE batting_team END as sb,
+           bowler, COUNT(CASE WHEN wicket_type IN ('bowled', 'caught', 'lbw', 'stumped', 'caught and bowled') THEN 1 END) as tw FROM deliveries GROUP BY sa, sb, bowler
+)
+SELECT m.*,
+    (SELECT batter FROM batting_riv br WHERE br.sa = m.side_a AND br.sb = m.side_b ORDER BY tr DESC LIMIT 1) as top_batter,
+    (SELECT tr FROM batting_riv br WHERE br.sa = m.side_a AND br.sb = m.side_b ORDER BY tr DESC LIMIT 1) as max_runs,
+    (SELECT bowler FROM bowling_riv bw WHERE bw.sa = m.side_a AND bw.sb = m.side_b ORDER BY tw DESC LIMIT 1) as top_bowler,
+    (SELECT tw FROM bowling_riv bw WHERE bw.sa = m.side_a AND bw.sb = m.side_b ORDER BY tw DESC LIMIT 1) as max_wickets
+FROM match_summaries m;
+
+-- 6. RACE MATRICES
 DROP MATERIALIZED VIEW IF EXISTS view_player_race_matrix;
-
 CREATE MATERIALIZED VIEW view_player_race_matrix AS
-WITH all_matches AS (
-    SELECT match_id, ROW_NUMBER() OVER (ORDER BY match_date, match_id) as global_num
-    FROM matches
-),
-match_scores AS (
-    SELECT batter as player, match_id, SUM(runs_batter) as runs
-    FROM deliveries GROUP BY batter, match_id
-),
-cumulative_scores AS (
-    SELECT 
-        p.batter as player,
-        m.global_num,
-        SUM(COALESCE(ms.runs, 0)) OVER (PARTITION BY p.batter ORDER BY m.global_num) as total
-    FROM (SELECT DISTINCT batter FROM deliveries) p
-    CROSS JOIN all_matches m
-    LEFT JOIN match_scores ms ON p.batter = ms.player AND m.match_id = ms.match_id
-)
-SELECT player, array_agg(total ORDER BY global_num) as history
-FROM cumulative_scores GROUP BY player;
+WITH all_m AS (SELECT match_id, ROW_NUMBER() OVER (ORDER BY match_date, match_id) as global_num FROM matches),
+m_scores AS (SELECT batter as p, match_id, SUM(runs_batter) as r FROM deliveries GROUP BY batter, match_id)
+SELECT p.batter as player, array_agg(SUM(COALESCE(ms.r, 0)) OVER (PARTITION BY p.batter ORDER BY m.global_num) ORDER BY m.global_num) as history
+FROM (SELECT DISTINCT batter FROM deliveries) p CROSS JOIN all_m m LEFT JOIN m_scores ms ON p.batter = ms.p AND m.match_id = ms.match_id GROUP BY p.batter;
 
--- 6. BOWLING RACE MATRIX
 DROP MATERIALIZED VIEW IF EXISTS view_bowler_race_matrix;
-
 CREATE MATERIALIZED VIEW view_bowler_race_matrix AS
-WITH all_matches AS (
-    SELECT match_id, ROW_NUMBER() OVER (ORDER BY match_date, match_id) as global_num
-    FROM matches
-),
-match_wickets AS (
-    SELECT bowler as player, match_id, 
-           COUNT(CASE WHEN wicket_type IN ('bowled', 'caught', 'lbw', 'stumped', 'caught and bowled') THEN 1 END) as wkts
-    FROM deliveries GROUP BY bowler, match_id
-),
-cumulative_wickets AS (
-    SELECT 
-        p.bowler as player,
-        m.global_num,
-        SUM(COALESCE(mw.wkts, 0)) OVER (PARTITION BY p.bowler ORDER BY m.global_num) as total
-    FROM (SELECT DISTINCT bowler FROM deliveries) p
-    CROSS JOIN all_matches m
-    LEFT JOIN match_wickets mw ON p.bowler = mw.player AND m.match_id = mw.match_id
-)
-SELECT player, array_agg(total ORDER BY global_num) as history
-FROM cumulative_wickets GROUP BY player;
+WITH all_m AS (SELECT match_id, ROW_NUMBER() OVER (ORDER BY match_date, match_id) as global_num FROM matches),
+m_wkts AS (SELECT bowler as p, match_id, COUNT(CASE WHEN wicket_type IN ('bowled', 'caught', 'lbw', 'stumped', 'caught and bowled') THEN 1 END) as w FROM deliveries GROUP BY bowler, match_id)
+SELECT p.bowler as player, array_agg(SUM(COALESCE(mw.w, 0)) OVER (PARTITION BY p.bowler ORDER BY m.global_num) ORDER BY m.global_num) as history
+FROM (SELECT DISTINCT bowler FROM deliveries) p CROSS JOIN all_m m LEFT JOIN m_wkts mw ON p.bowler = mw.p AND m.match_id = mw.match_id GROUP BY p.bowler;
 
 -- 7. REFRESH & INDEXING
 REFRESH MATERIALIZED VIEW view_batter_master;
 REFRESH MATERIALIZED VIEW view_bowler_master;
+REFRESH MATERIALIZED VIEW view_team_rivalry_master;
 REFRESH MATERIALIZED VIEW view_player_race_matrix;
 REFRESH MATERIALIZED VIEW view_bowler_race_matrix;
 
 CREATE INDEX idx_batter_player ON view_batter_master(player);
 CREATE INDEX idx_bowler_player ON view_bowler_master(player);
+CREATE INDEX idx_riv_teams ON view_team_rivalry_master(side_a, side_b);
