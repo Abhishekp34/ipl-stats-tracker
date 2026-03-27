@@ -19,16 +19,16 @@ def init_connection():
 supabase = init_connection()
 
 st.title("📅 IPL: On This Day")
+st.markdown("Discover historical matches and top performances delivered on this calendar date.")
 
-# 3. Date Picker
-target_date = st.date_input("Select a date to see history:", datetime.date.today())
+# 3. Date Selection
+target_date = st.date_input("Select a date:", datetime.date.today())
 month = int(target_date.month)
 day = int(target_date.day)
 
-# --- DATA FETCHING ---
-
 @st.cache_data(ttl=3600)
 def get_otd_data(m, d):
+    # Call the RPC function we created earlier
     matches_res = supabase.rpc('get_matches_by_day_month', {
         'target_month': m, 
         'target_day': d
@@ -37,81 +37,79 @@ def get_otd_data(m, d):
     matches_df = pd.DataFrame(matches_res.data)
     
     if matches_df.empty:
-        return matches_df, pd.DataFrame(), []
+        return matches_df, pd.DataFrame()
 
-    # Convert match_ids to a list of strings to be safe with the .in_() filter
     match_ids = matches_df['match_id'].astype(str).tolist()
     
-    # Fetch Deliveries for these specific matches
+    # Fetch all deliveries for these specific matches
     deliv_res = supabase.table('deliveries').select(
         'match_id, batter, runs_batter, bowler, wicket_type'
     ).in_('match_id', match_ids).execute()
     
-    deliv_df = pd.DataFrame(deliv_res.data)
-    
-    return matches_df, deliv_df, match_ids
+    return matches_df, pd.DataFrame(deliv_res.data)
 
-matches_df, deliv_df, match_ids = get_otd_data(month, day)
+matches_df, deliv_df = get_otd_data(month, day)
 
 if matches_df.empty:
-    st.warning(f"No IPL matches were played on {target_date.strftime('%B %d')} in history.")
+    st.warning(f"No IPL matches were played on **{target_date.strftime('%B %d')}** in recorded history.")
 else:
-    # 4. Match Highlights
-    st.subheader(f"🏟️ Matches Played on {target_date.strftime('%B %d')}")
+    # 4. Match List
+    st.subheader(f"🏟️ Matches on {target_date.strftime('%B %d')}")
+    
+    # Display matches in a clean grid
     for _, row in matches_df.iterrows():
-        # Handle date conversion safely
-        match_date = pd.to_datetime(row['match_date'])
-        year = match_date.year
-        with st.expander(f"{year}: {row['team1']} vs {row['team2']}"):
-            st.write(f"**Venue:** {row['venue']}, {row['city']}")
-            st.success(f"🏆 Winner: {row['winner']}")
+        year = pd.to_datetime(row['match_date']).year
+        with st.expander(f"**{year}**: {row['team1']} vs {row['team2']}"):
+            col1, col2 = st.columns(2)
+            col1.write(f"📍 **Venue:** {row['venue']}")
+            col1.write(f"🏙️ **City:** {row['city']}")
+            col2.success(f"🏆 **Winner:** {row['winner']}")
 
-    # 5. Legendary Performances
+    # 5. Star Performances of the Day
     st.divider()
-    st.subheader("🌟 Legendary Performances")
+    st.subheader("🌟 Top Performances on this Date")
     
     if not deliv_df.empty:
-        # Centuries
-        runs_per_match = deliv_df.groupby(['match_id', 'batter'])['runs_batter'].sum().reset_index()
-        centuries = runs_per_match[runs_per_match['runs_batter'] >= 100]
+        # Calculate scores for these matches
+        match_scores = deliv_df.groupby(['match_id', 'batter'])['runs_batter'].sum().reset_index()
+        high_scores = match_scores[match_scores['runs_batter'] >= 50].sort_values('runs_batter', ascending=False)
         
-        # 5-Wicket Hauls (Using the standardized wicket list)
+        # Calculate wickets for these matches
         valid_wickets = ['bowled', 'caught', 'lbw', 'stumped', 'caught and bowled']
         deliv_df['is_wicket'] = deliv_df['wicket_type'].isin(valid_wickets)
-        wkts_per_match = deliv_df.groupby(['match_id', 'bowler'])['is_wicket'].sum().reset_index()
-        five_fers = wkts_per_match[wkts_per_match['is_wicket'] >= 5]
+        match_wickets = deliv_df.groupby(['match_id', 'bowler'])['is_wicket'].sum().reset_index()
+        top_bowlers = match_wickets[match_wickets['is_wicket'] >= 3].sort_values('is_wicket', ascending=False)
 
-        col_a, col_b = st.columns(2)
-        with col_a:
-            st.write("🏏 **Centuries Today**")
-            if not centuries.empty:
-                for _, row in centuries.iterrows():
-                    st.info(f"**{row['batter']}** scored {int(row['runs_batter'])}")
-            else:
-                st.write("None")
+        col_bat, col_bowl = st.columns(2)
         
-        with col_b:
-            st.write("🎯 **5-Wicket Hauls Today**")
-            if not five_fers.empty:
-                for _, row in five_fers.iterrows():
-                    st.error(f"**{row['bowler']}** took {int(row['is_wicket'])} wickets")
+        with col_bat:
+            st.write("### 🏏 Batting Heroes")
+            if not high_scores.empty:
+                for _, s in high_scores.iterrows():
+                    st.info(f"**{s['batter']}** scored **{int(s['runs_batter'])}** runs")
             else:
-                st.write("None")
+                st.write("No 50+ scores on this date.")
 
-    # 6. Leaderboards: Top of the Day
+        with col_bowl:
+            st.write("### 🎯 Bowling Heroes")
+            if not top_bowlers.empty:
+                for _, w in top_bowlers.iterrows():
+                    st.error(f"**{w['bowler']}** took **{int(w['is_wicket'])}** wickets")
+            else:
+                st.write("No 3+ wicket hauls on this date.")
+
+    # 6. Cumulative Leaders for this Date
     st.divider()
-    st.subheader(f"📊 All-time Leaderboard for this Date")
+    st.subheader(f"📊 All-Time {target_date.strftime('%B %d')} Leaders")
+    st.info("Total stats accumulated by players across all matches played on this specific calendar date.")
     
-    top_n = st.radio("Show top:", [5, 10], horizontal=True)
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.write(f"🔥 Most Runs")
-        top_batters = deliv_df.groupby('batter')['runs_batter'].sum().sort_values(ascending=False).head(top_n)
-        # Display as a clean list
-        st.table(top_batters)
+    c1, c2 = st.columns(2)
+    with c1:
+        st.write("**Most Runs Today**")
+        all_time_bat = deliv_df.groupby('batter')['runs_batter'].sum().sort_values(ascending=False).head(10)
+        st.table(all_time_bat)
 
-    with col2:
-        st.write(f"🎯 Most Wickets")
-        top_bowlers = deliv_df.groupby('bowler')['is_wicket'].sum().sort_values(ascending=False).head(top_n)
-        st.table(top_bowlers)
+    with c2:
+        st.write("**Most Wickets Today**")
+        all_time_bowl = deliv_df.groupby('bowler')['is_wicket'].sum().sort_values(ascending=False).head(10)
+        st.table(all_time_bowl)
