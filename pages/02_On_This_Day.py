@@ -29,7 +29,6 @@ day = int(target_date.day)
 
 @st.cache_data(ttl=3600)
 def get_otd_data(m, d):
-    # Call the SQL function we created in Step 1
     matches_res = supabase.rpc('get_matches_by_day_month', {
         'target_month': m, 
         'target_day': d
@@ -40,7 +39,8 @@ def get_otd_data(m, d):
     if matches_df.empty:
         return matches_df, pd.DataFrame(), []
 
-    match_ids = matches_df['match_id'].tolist()
+    # Convert match_ids to a list of strings to be safe with the .in_() filter
+    match_ids = matches_df['match_id'].astype(str).tolist()
     
     # Fetch Deliveries for these specific matches
     deliv_res = supabase.table('deliveries').select(
@@ -59,7 +59,9 @@ else:
     # 4. Match Highlights
     st.subheader(f"🏟️ Matches Played on {target_date.strftime('%B %d')}")
     for _, row in matches_df.iterrows():
-        year = str(row['match_date'])[:4]
+        # Handle date conversion safely
+        match_date = pd.to_datetime(row['match_date'])
+        year = match_date.year
         with st.expander(f"{year}: {row['team1']} vs {row['team2']}"):
             st.write(f"**Venue:** {row['venue']}, {row['city']}")
             st.success(f"🏆 Winner: {row['winner']}")
@@ -73,9 +75,9 @@ else:
         runs_per_match = deliv_df.groupby(['match_id', 'batter'])['runs_batter'].sum().reset_index()
         centuries = runs_per_match[runs_per_match['runs_batter'] >= 100]
         
-        # 5-Wicket Hauls
-        wickets = ['bowled', 'caught', 'lbw', 'stumped', 'caught and bowled', 'hit wicket']
-        deliv_df['is_wicket'] = deliv_df['wicket_type'].isin(wickets)
+        # 5-Wicket Hauls (Using the standardized wicket list)
+        valid_wickets = ['bowled', 'caught', 'lbw', 'stumped', 'caught and bowled']
+        deliv_df['is_wicket'] = deliv_df['wicket_type'].isin(valid_wickets)
         wkts_per_match = deliv_df.groupby(['match_id', 'bowler'])['is_wicket'].sum().reset_index()
         five_fers = wkts_per_match[wkts_per_match['is_wicket'] >= 5]
 
@@ -106,9 +108,10 @@ else:
     with col1:
         st.write(f"🔥 Most Runs")
         top_batters = deliv_df.groupby('batter')['runs_batter'].sum().sort_values(ascending=False).head(top_n)
-        st.dataframe(top_batters, use_container_width=True)
+        # Display as a clean list
+        st.table(top_batters)
 
     with col2:
         st.write(f"🎯 Most Wickets")
         top_bowlers = deliv_df.groupby('bowler')['is_wicket'].sum().sort_values(ascending=False).head(top_n)
-        st.dataframe(top_bowlers, use_container_width=True)
+        st.table(top_bowlers)
