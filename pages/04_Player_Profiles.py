@@ -28,7 +28,7 @@ def list_all_players():
 all_names = list_all_players()
 
 # 3. UI Header
-st.title("👤 Player Resume")
+st.title("👤 Player Profile")
 st.markdown("Your IPL career journey, powered by optimized historical data.")
 
 player_name = st.selectbox(

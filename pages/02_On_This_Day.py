@@ -18,7 +18,7 @@ def init_connection():
 
 supabase = init_connection()
 
-st.title("📅 IPL: On This Day")
+st.title("IPL: On This Day")
 st.markdown("Discover historical matches and top performances delivered on this calendar date.")
 
 # 3. Date Selection

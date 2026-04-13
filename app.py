@@ -6,7 +6,7 @@ from supabase import create_client, Client
 from dotenv import load_dotenv
 
 # 1. Setup the Page
-st.set_page_config(page_title="IPL Stats Tracker", layout="wide", page_icon="🏏")
+st.set_page_config(page_title="The IPL Tracker", layout="wide", page_icon="🏏")
 
 # 2. Securely connect to Supabase
 @st.cache_resource
@@ -28,7 +28,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-st.title("🏏 IPL Stats Tracker")
+st.title("🏏 The IPL Tracker")
 st.markdown("### Your Automated Home for IPL Analytics")
 st.divider()
 
