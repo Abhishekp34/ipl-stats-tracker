@@ -72,11 +72,17 @@ if data:
     
     with col_p1:
         st.write("### 🏏 Top Run Getter")
-        st.info(f"**{data['top_batter']}** has scored **{int(data['max_runs'])}** runs in this rivalry.")
+        # Added 'or "Unknown"' and 'or 0' to prevent crashes
+        top_batter = data.get('top_batter') or "N/A"
+        max_runs = int(data.get('max_runs') or 0)
+        st.info(f"**{top_batter}** has scored **{max_runs}** runs in this rivalry.")
         
     with col_p2:
         st.write("### 🎯 Leading Wicket Taker")
-        st.error(f"**{data['top_bowler']}** has taken **{int(data['max_wickets'])}** wickets in these clashes.")
+        # Added fallback for wickets as well
+        top_bowler = data.get('top_bowler') or "N/A"
+        max_wickets = int(data.get('max_wickets') or 0)
+        st.error(f"**{top_bowler}** has taken **{max_wickets}** wickets in these clashes.")
 
     # --- RECENT MATCHES ---
     st.write("### 📝 Recent Encounters")
