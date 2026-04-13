@@ -11,18 +11,50 @@ url = os.environ.get("SUPABASE_URL")
 key = os.environ.get("SUPABASE_KEY")
 supabase: Client = create_client(url, key)
 
+def standardize_team_name(name, match_date):
+    """
+    Standardizes team names based on historical context.
+    Handles the 'DC' paradox and name changes (Bangalore -> Bengaluru).
+    """
+    if not name:
+        return name
+    
+    name = name.strip()
+    year = int(str(match_date)[:4]) if match_date else 0
+
+    # 1. Handle the "DC" Paradox
+    # Deccan Chargers (2008-2012) vs Delhi Capitals (2019-Present)
+    if name == "DC" or name == "Deccan Chargers":
+        if year <= 2012:
+            return "Deccan Chargers"
+        else:
+            return "Delhi Capitals"
+
+    # 2. Map other variations to your 'Master' names
+    mapping = {
+        'Delhi Daredevils': 'Delhi Capitals',
+        'Kings XI Punjab': 'Punjab Kings',
+        'KXIP': 'Punjab Kings',
+        'Royal Challengers Bangalore': 'Royal Challengers Bengaluru',
+        'R C Bangalore': 'Royal Challengers Bengaluru',
+        'RCB': 'Royal Challengers Bengaluru',
+        'Rising Pune Supergiants': 'Rising Pune Supergiant',
+        'Rising Pune Supergiant': 'Rising Pune Supergiant',
+        'Pune Warriors India': 'Pune Warriors'
+    }
+    
+    return mapping.get(name, name)
+
 def trigger_view_refresh():
     """Calls the Supabase RPC function to recalculate all stats"""
     print("\n🚀 Triggering Materialized View refresh...")
     try:
-        # Call the SQL function we created in Supabase
         supabase.rpc('refresh_all_ipl_views').execute()
         print("✅ All views refreshed successfully! Your app is now up to date.")
     except Exception as e:
         print(f"❌ Error refreshing views: {e}")
 
 def run_sync():
-    # --- STEP 1: UPLOAD DATA ---
     json_files = glob.glob(os.path.join('data', '*.json'))
     print(f"🚀 Found {len(json_files)} matches. Starting Upload...")
 
@@ -32,17 +64,23 @@ def run_sync():
         
         match_id = os.path.basename(file).split('.')[0]
         info = data.get('info', {})
-        teams = info.get('teams', [None, None])
+        match_date = info.get('dates', [None])[0]
+        
+        # Standardize teams at the start
+        raw_teams = info.get('teams', [None, None])
+        team1 = standardize_team_name(raw_teams[0], match_date)
+        team2 = standardize_team_name(raw_teams[1], match_date)
+        winner = standardize_team_name(info.get('outcome', {}).get('winner'), match_date)
         
         match_data = {
             'match_id': match_id,
-            'match_date': info.get('dates', [None])[0],
-            'season': str(info.get('dates', [''])[0])[:4],
+            'match_date': match_date,
+            'season': str(match_date)[:4] if match_date else '',
             'venue': info.get('venue'),
             'city': info.get('city'),
-            'team1': teams[0],
-            'team2': teams[1],
-            'winner': info.get('outcome', {}).get('winner'),
+            'team1': team1,
+            'team2': team2,
+            'winner': winner,
             'player_of_match': info.get('player_of_match', [None])[0]
         }
         
@@ -52,8 +90,10 @@ def run_sync():
         seen_balls = set() 
         
         for inning_idx, inning in enumerate(data.get('innings', [])):
-            bat_team = inning.get('team')
-            bowl_team = teams[1] if teams[0] == bat_team else teams[0]
+            # Standardize batting and bowling teams for every ball
+            raw_bat_team = inning.get('team')
+            bat_team = standardize_team_name(raw_bat_team, match_date)
+            bowl_team = team2 if team1 == bat_team else team1
             
             for over_data in inning.get('overs', []):
                 current_over = over_data.get('over')
@@ -89,14 +129,13 @@ def run_sync():
         
         if delivery_list:
             try:
-                supabase.table('deliveries').upsert(delivery_list).execute()
+                # Using 1000-row chunks for large matches (optional but safer for Supabase limits)
+                for i in range(0, len(delivery_list), 1000):
+                    supabase.table('deliveries').upsert(delivery_list[i:i+1000]).execute()
             except Exception as e:
                 tqdm.write(f"⚠️ Error uploading match {match_id}: {e}")
 
     print("\n✅ Upload Complete! All data is in the database.")
-    
-    # --- STEP 2: REFRESH VIEWS ---
-    # We call this inside run_sync so it happens after the for-loop finishes
     trigger_view_refresh()
 
 if __name__ == "__main__":
