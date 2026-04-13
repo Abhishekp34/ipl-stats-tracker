@@ -1,46 +1,56 @@
 -- ==========================================
--- IPL MASTER CLEANUP & OPTIMIZED VIEWS
+-- IPL MASTER CLEANUP & OPTIMIZED VIEWS (2026)
 -- ==========================================
 
--- 1. STANDARDIZE TEAM NAMES
+-- 1. STANDARDIZE TEAM NAMES (Including Historical DC separation)
 UPDATE matches
 SET 
     team1 = CASE 
-        WHEN team1 IN ('Royal Challengers Bangalore', 'R C Bangalore') THEN 'Royal Challengers Bengaluru'
+        WHEN team1 = 'DC' AND match_date < '2013-01-01' THEN 'Deccan Chargers'
+        WHEN team1 = 'DC' AND match_date >= '2019-01-01' THEN 'Delhi Capitals'
+        WHEN team1 IN ('Royal Challengers Bangalore', 'R C Bangalore', 'RCB') THEN 'Royal Challengers Bengaluru'
         WHEN team1 IN ('Kings XI Punjab', 'KXIP') THEN 'Punjab Kings'
         WHEN team1 = 'Delhi Daredevils' THEN 'Delhi Capitals'
-        WHEN team1 = 'Rising Pune Supergiants' THEN 'Rising Pune Supergiant'
+        WHEN team1 IN ('Rising Pune Supergiants', 'Rising Pune Supergiant') THEN 'Rising Pune Supergiant'
         ELSE team1 
     END,
     team2 = CASE 
-        WHEN team2 IN ('Royal Challengers Bangalore', 'R C Bangalore') THEN 'Royal Challengers Bengaluru'
+        WHEN team2 = 'DC' AND match_date < '2013-01-01' THEN 'Deccan Chargers'
+        WHEN team2 = 'DC' AND match_date >= '2019-01-01' THEN 'Delhi Capitals'
+        WHEN team2 IN ('Royal Challengers Bangalore', 'R C Bangalore', 'RCB') THEN 'Royal Challengers Bengaluru'
         WHEN team2 IN ('Kings XI Punjab', 'KXIP') THEN 'Punjab Kings'
         WHEN team2 = 'Delhi Daredevils' THEN 'Delhi Capitals'
-        WHEN team2 = 'Rising Pune Supergiants' THEN 'Rising Pune Supergiant'
+        WHEN team2 IN ('Rising Pune Supergiants', 'Rising Pune Supergiant') THEN 'Rising Pune Supergiant'
         ELSE team2 
     END,
     winner = CASE 
-        WHEN winner IN ('Royal Challengers Bangalore', 'R C Bangalore') THEN 'Royal Challengers Bengaluru'
+        WHEN winner = 'DC' AND match_date < '2013-01-01' THEN 'Deccan Chargers'
+        WHEN winner = 'DC' AND match_date >= '2019-01-01' THEN 'Delhi Capitals'
+        WHEN winner IN ('Royal Challengers Bangalore', 'R C Bangalore', 'RCB') THEN 'Royal Challengers Bengaluru'
         WHEN winner IN ('Kings XI Punjab', 'KXIP') THEN 'Punjab Kings'
         WHEN winner = 'Delhi Daredevils' THEN 'Delhi Capitals'
-        WHEN winner = 'Rising Pune Supergiants' THEN 'Rising Pune Supergiant'
+        WHEN winner IN ('Rising Pune Supergiants', 'Rising Pune Supergiant') THEN 'Rising Pune Supergiant'
         ELSE winner 
     END;
 
 UPDATE deliveries
 SET 
     batting_team = CASE 
-        WHEN batting_team IN ('Royal Challengers Bangalore', 'R C Bangalore') THEN 'Royal Challengers Bengaluru'
-        WHEN batting_team = 'Kings XI Punjab' THEN 'Punjab Kings'
+        WHEN batting_team = 'DC' AND match_id IN (SELECT match_id FROM matches WHERE team1 = 'Deccan Chargers' OR team2 = 'Deccan Chargers') THEN 'Deccan Chargers'
+        WHEN batting_team = 'DC' AND match_id IN (SELECT match_id FROM matches WHERE team1 = 'Delhi Capitals' OR team2 = 'Delhi Capitals') THEN 'Delhi Capitals'
+        WHEN batting_team IN ('Royal Challengers Bangalore', 'R C Bangalore', 'RCB') THEN 'Royal Challengers Bengaluru'
+        WHEN batting_team IN ('Kings XI Punjab', 'KXIP') THEN 'Punjab Kings'
         WHEN batting_team = 'Delhi Daredevils' THEN 'Delhi Capitals'
-        WHEN batting_team = 'Rising Pune Supergiants' THEN 'Rising Pune Supergiant'
+        WHEN batting_team IN ('Rising Pune Supergiants', 'Rising Pune Supergiant') THEN 'Rising Pune Supergiant'
         ELSE batting_team 
     END,
     bowling_team = CASE 
-        WHEN bowling_team IN ('Royal Challengers Bangalore', 'R C Bangalore') THEN 'Royal Challengers Bengaluru'
-        WHEN bowling_team = 'Kings XI Punjab' THEN 'Punjab Kings'
+        WHEN bowling_team = 'DC' AND match_id IN (SELECT match_id FROM matches WHERE team1 = 'Deccan Chargers' OR team2 = 'Deccan Chargers') THEN 'Deccan Chargers'
+        WHEN bowling_team = 'DC' AND match_id IN (SELECT match_id FROM matches WHERE team1 = 'Delhi Capitals' OR team2 = 'Delhi Capitals') THEN 'Delhi Capitals'
+        WHEN bowling_team IN ('Royal Challengers Bangalore', 'R C Bangalore', 'RCB') THEN 'Royal Challengers Bengaluru'
+        WHEN bowling_team IN ('Kings XI Punjab', 'KXIP') THEN 'Punjab Kings'
         WHEN bowling_team = 'Delhi Daredevils' THEN 'Delhi Capitals'
-        WHEN bowling_team = 'Rising Pune Supergiants' THEN 'Rising Pune Supergiant'
+        WHEN bowling_team IN ('Rising Pune Supergiants', 'Rising Pune Supergiant') THEN 'Rising Pune Supergiant'
         ELSE bowling_team 
     END;
 
@@ -58,9 +68,8 @@ SET venue = CASE
     ELSE venue 
 END;
 
--- 3. GLOBAL BATTING MASTER (Corrected Formulas for Avg & HS)
+-- 3. BATTING MASTER VIEW
 DROP MATERIALIZED VIEW IF EXISTS view_batter_master CASCADE;
-
 CREATE MATERIALIZED VIEW view_batter_master AS
 WITH player_latest_team AS (
     SELECT DISTINCT ON (batter) batter, batting_team as current_team
@@ -68,28 +77,22 @@ WITH player_latest_team AS (
     ORDER BY batter, m.match_date DESC, m.match_id DESC
 ),
 match_scores AS (
-    SELECT 
-        batter, match_id, SUM(runs_batter) as runs_in_match,
-        MAX(CASE WHEN player_out = batter THEN 1 ELSE 0 END) as was_dismissed
+    SELECT batter, match_id, SUM(runs_batter) as runs_in_match,
+    MAX(CASE WHEN player_out = batter THEN 1 ELSE 0 END) as was_dismissed
     FROM deliveries GROUP BY batter, match_id
 ),
 true_hs AS (
-    SELECT DISTINCT ON (batter)
-        batter, runs_in_match,
-        CASE WHEN was_dismissed = 0 THEN runs_in_match::text || '*' ELSE runs_in_match::text END as hs_final
-    FROM match_scores
-    ORDER BY batter, runs_in_match DESC, was_dismissed ASC
+    SELECT DISTINCT ON (batter) batter, runs_in_match,
+    CASE WHEN was_dismissed = 0 THEN runs_in_match::text || '*' ELSE runs_in_match::text END as hs_final
+    FROM match_scores ORDER BY batter, runs_in_match DESC, was_dismissed ASC
 ),
 dismissals AS (
     SELECT player_out as player, COUNT(*) as total_outs
     FROM deliveries WHERE player_out IS NOT NULL GROUP BY player_out
 )
 SELECT 
-    d.batter AS player,
-    lt.current_team AS team,
-    COUNT(DISTINCT d.match_id) AS mat,
-    SUM(d.runs_batter) AS runs,
-    ths.hs_final AS hs, 
+    d.batter AS player, lt.current_team AS team, COUNT(DISTINCT d.match_id) AS mat,
+    SUM(d.runs_batter) AS runs, ths.hs_final AS hs, 
     ROUND(SUM(d.runs_batter)::numeric / NULLIF(COALESCE(dis.total_outs, 0), 0), 2) AS avg,
     ROUND((SUM(d.runs_batter)::numeric / NULLIF(COUNT(CASE WHEN extra_type NOT IN ('wides') OR extra_type IS NULL THEN 1 END), 0)) * 100, 2) AS sr,
     SUM(CASE WHEN d.runs_batter = 4 THEN 1 ELSE 0 END) AS "4s",
@@ -103,9 +106,8 @@ LEFT JOIN dismissals dis ON d.batter = dis.player
 LEFT JOIN match_scores ms ON d.batter = ms.batter AND d.match_id = ms.match_id
 GROUP BY d.batter, lt.current_team, ths.hs_final, dis.total_outs;
 
--- 4. GLOBAL BOWLING MASTER
+-- 4. BOWLING MASTER VIEW
 DROP MATERIALIZED VIEW IF EXISTS view_bowler_master CASCADE;
-
 CREATE MATERIALIZED VIEW view_bowler_master AS
 WITH player_latest_team AS (
     SELECT DISTINCT ON (bowler) bowler, bowling_team as current_team
@@ -117,9 +119,7 @@ match_wickets AS (
     FROM deliveries GROUP BY bowler, match_id
 )
 SELECT 
-    d.bowler AS player,
-    lt.current_team AS team,
-    COUNT(DISTINCT d.match_id) AS mat,
+    d.bowler AS player, lt.current_team AS team, COUNT(DISTINCT d.match_id) AS mat,
     COUNT(CASE WHEN d.wicket_type IN ('bowled', 'caught', 'lbw', 'stumped', 'caught and bowled') THEN 1 END) AS wkts,
     ROUND((SUM(d.runs_total)::numeric / NULLIF(COUNT(d.ball), 0)) * 6, 2) AS econ,
     COUNT(CASE WHEN d.runs_batter = 0 AND (d.runs_extras = 0 OR d.extra_type IN ('byes', 'legbyes')) THEN 1 END) AS dots,
@@ -130,9 +130,8 @@ JOIN player_latest_team lt ON d.bowler = lt.bowler
 LEFT JOIN match_wickets mw ON d.bowler = mw.bowler AND d.match_id = mw.match_id
 GROUP BY d.bowler, lt.current_team;
 
--- 5. TEAM RIVALRY MASTER
+-- 5. TEAM RIVALRY VIEW
 DROP MATERIALIZED VIEW IF EXISTS view_team_rivalry_master CASCADE;
-
 CREATE MATERIALIZED VIEW view_team_rivalry_master AS
 WITH match_summaries AS (
     SELECT 
@@ -160,28 +159,68 @@ SELECT m.*,
     (SELECT tw FROM bowling_riv bw WHERE bw.sa = m.side_a AND bw.sb = m.side_b ORDER BY tw DESC LIMIT 1) as max_wickets
 FROM match_summaries m;
 
--- 6. RACE MATRICES
-DROP MATERIALIZED VIEW IF EXISTS view_player_race_matrix;
+-- 6. BASE RACE MATRICES
+DROP MATERIALIZED VIEW IF EXISTS view_player_race_matrix CASCADE;
 CREATE MATERIALIZED VIEW view_player_race_matrix AS
 WITH all_m AS (SELECT match_id, ROW_NUMBER() OVER (ORDER BY match_date, match_id) as global_num FROM matches),
-m_scores AS (SELECT batter as p, match_id, SUM(runs_batter) as r FROM deliveries GROUP BY batter, match_id)
-SELECT p.batter as player, array_agg(SUM(COALESCE(ms.r, 0)) OVER (PARTITION BY p.batter ORDER BY m.global_num) ORDER BY m.global_num) as history
-FROM (SELECT DISTINCT batter FROM deliveries) p CROSS JOIN all_m m LEFT JOIN m_scores ms ON p.batter = ms.p AND m.match_id = ms.match_id GROUP BY p.batter;
+m_scores AS (SELECT batter as p, match_id, SUM(runs_batter) as r FROM deliveries GROUP BY batter, match_id),
+running_totals AS (
+    SELECT p.batter as player, m.global_num, SUM(COALESCE(ms.r, 0)) OVER (PARTITION BY p.batter ORDER BY m.global_num) as cumulative_runs
+    FROM (SELECT DISTINCT batter FROM deliveries) p CROSS JOIN all_m m LEFT JOIN m_scores ms ON p.batter = ms.p AND m.match_id = ms.match_id
+)
+SELECT player, array_agg(cumulative_runs ORDER BY global_num) as history FROM running_totals GROUP BY player;
 
-DROP MATERIALIZED VIEW IF EXISTS view_bowler_race_matrix;
+DROP MATERIALIZED VIEW IF EXISTS view_bowler_race_matrix CASCADE;
 CREATE MATERIALIZED VIEW view_bowler_race_matrix AS
 WITH all_m AS (SELECT match_id, ROW_NUMBER() OVER (ORDER BY match_date, match_id) as global_num FROM matches),
-m_wkts AS (SELECT bowler as p, match_id, COUNT(CASE WHEN wicket_type IN ('bowled', 'caught', 'lbw', 'stumped', 'caught and bowled') THEN 1 END) as w FROM deliveries GROUP BY bowler, match_id)
-SELECT p.bowler as player, array_agg(SUM(COALESCE(mw.w, 0)) OVER (PARTITION BY p.bowler ORDER BY m.global_num) ORDER BY m.global_num) as history
-FROM (SELECT DISTINCT bowler FROM deliveries) p CROSS JOIN all_m m LEFT JOIN m_wkts mw ON p.bowler = mw.p AND m.match_id = mw.match_id GROUP BY p.bowler;
+m_wkts AS (SELECT bowler as p, match_id, COUNT(CASE WHEN wicket_type IN ('bowled', 'caught', 'lbw', 'stumped', 'caught and bowled') THEN 1 END) as w FROM deliveries GROUP BY bowler, match_id),
+running_wickets AS (
+    SELECT p.bowler as player, m.global_num, SUM(COALESCE(mw.w, 0)) OVER (PARTITION BY p.bowler ORDER BY m.global_num) as cumulative_wkts
+    FROM (SELECT DISTINCT bowler FROM deliveries) p CROSS JOIN all_m m LEFT JOIN m_wkts mw ON p.bowler = mw.p AND m.match_id = mw.match_id
+)
+SELECT player, array_agg(cumulative_wkts ORDER BY global_num) as history FROM running_wickets GROUP BY player;
 
--- 7. REFRESH & INDEXING
-REFRESH MATERIALIZED VIEW view_batter_master;
-REFRESH MATERIALIZED VIEW view_bowler_master;
-REFRESH MATERIALIZED VIEW view_team_rivalry_master;
-REFRESH MATERIALIZED VIEW view_player_race_matrix;
-REFRESH MATERIALIZED VIEW view_bowler_race_matrix;
+-- 7. TOP 30 RACE VIEWS
+DROP MATERIALIZED VIEW IF EXISTS view_top_30_batting_race CASCADE;
+CREATE MATERIALIZED VIEW view_top_30_batting_race AS
+WITH unnested_history AS (
+    SELECT player, unnest(history) as cumulative_runs, generate_series(1, array_length(history, 1)) as match_seq
+    FROM view_player_race_matrix
+),
+ranked_history AS (
+    SELECT match_seq, player, cumulative_runs, DENSE_RANK() OVER (PARTITION BY match_seq ORDER BY cumulative_runs DESC) as rank
+    FROM unnested_history
+)
+SELECT * FROM ranked_history WHERE rank <= 30;
 
-CREATE INDEX idx_batter_player ON view_batter_master(player);
-CREATE INDEX idx_bowler_player ON view_bowler_master(player);
-CREATE INDEX idx_riv_teams ON view_team_rivalry_master(side_a, side_b);
+DROP MATERIALIZED VIEW IF EXISTS view_top_30_bowling_race CASCADE;
+CREATE MATERIALIZED VIEW view_top_30_bowling_race AS
+WITH unnested_bowling AS (
+    SELECT player, unnest(history) as cumulative_wickets, generate_series(1, array_length(history, 1)) as match_seq
+    FROM view_bowler_race_matrix
+),
+ranked_bowling AS (
+    SELECT match_seq, player, cumulative_wickets, DENSE_RANK() OVER (PARTITION BY match_seq ORDER BY cumulative_wickets DESC) as rank
+    FROM unnested_bowling
+)
+SELECT * FROM ranked_bowling WHERE rank <= 30;
+
+-- 8. INDEXING FOR PERFORMANCE (Safe Re-run)
+CREATE INDEX IF NOT EXISTS idx_batter_player ON view_batter_master(player);
+CREATE INDEX IF NOT EXISTS idx_bowler_player ON view_bowler_master(player);
+CREATE INDEX IF NOT EXISTS idx_top30_bat_seq ON view_top_30_batting_race(match_seq);
+CREATE INDEX IF NOT EXISTS idx_top30_bowl_seq ON view_top_30_bowling_race(match_seq);
+
+-- 9. AUTOMATION RPC FUNCTION
+CREATE OR REPLACE FUNCTION refresh_all_ipl_views()
+RETURNS void AS $$
+BEGIN
+    REFRESH MATERIALIZED VIEW view_batter_master;
+    REFRESH MATERIALIZED VIEW view_bowler_master;
+    REFRESH MATERIALIZED VIEW view_team_rivalry_master;
+    REFRESH MATERIALIZED VIEW view_player_race_matrix;
+    REFRESH MATERIALIZED VIEW view_bowler_race_matrix;
+    REFRESH MATERIALIZED VIEW view_top_30_batting_race;
+    REFRESH MATERIALIZED VIEW view_top_30_bowling_race;
+END;
+$$ LANGUAGE plpgsql;
