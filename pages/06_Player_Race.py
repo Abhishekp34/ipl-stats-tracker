@@ -54,7 +54,7 @@ def display_race_plot(container, seq, table, metric_col, category):
             title=f"IPL {category} - Match #{seq}"
         )
         
-        x_limit = 9000 if category == "Batting" else 220
+        x_limit = 9500 if category == "Batting" else 250
         
         fig.update_layout(
             xaxis_range=[0, x_limit],
@@ -76,22 +76,27 @@ def render_race(category):
     table = 'view_top_30_batting_race' if category == "Batting" else 'view_top_30_bowling_race'
     metric_col = 'cumulative_runs' if category == "Batting" else 'cumulative_wickets'
     
+    # 1. DYNAMICALLY get the latest match count
+    count_res = supabase.table(table).select("match_seq", count='exact').order("match_seq", desc=True).limit(1).execute()
+    # Fallback to 1169 if query fails, otherwise get the actual max
+    max_matches = count_res.data[0]['match_seq'] if count_res.data else 1169
+
     col1, col2 = st.columns([1, 4])
     with col1:
-        play_btn = st.button(f"▶️ Start {category} Race", key=f"btn_{category}")
+        play_btn = st.button(f"▶️ Start {category} Race", key=f"play_btn_{category}")
     with col2:
-        selected_seq = st.slider("Timeline", 1, 1169, 1169, key=f"sld_{category}")
+        # Use max_matches here
+        selected_seq = st.slider("Timeline", 1, max_matches, max_matches, key=f"sld_{category}")
 
     chart_holder = st.empty()
 
     if play_btn:
-        # Step=5 makes the animation significantly smoother for 1000+ matches
-        for i in range(1, 1170, 5): 
+        # Loop up to the actual max_matches + 1
+        for i in range(1, max_matches + 1, 5): 
             display_race_plot(chart_holder, i, table, metric_col, category)
             time.sleep(0.001) 
     else:
         display_race_plot(chart_holder, selected_seq, table, metric_col, category)
-
 # --- UI EXECUTION ---
 st.set_page_config(page_title="IPL Player Race", layout="wide")
 st.title("🏃 All-Time Player Race")
