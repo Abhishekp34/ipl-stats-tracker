@@ -29,7 +29,6 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 st.title("🏏 The IPL Tracker")
-st.markdown("### Your Automated Home for IPL Analytics")
 st.divider()
 
 # 4. Quick Navigation Section (Updated to match your file structure)
