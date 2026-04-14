@@ -2,9 +2,7 @@
 -- IPL MASTER CLEANUP & OPTIMIZED MATERIALIZED VIEWS (2026)
 -- ======================================================
 
--- ------------------------------------------------------
 -- 1. STANDARDIZE TEAM NAMES (Directly in Raw Tables)
--- ------------------------------------------------------
 UPDATE matches
 SET 
     team1 = CASE 
@@ -56,9 +54,7 @@ SET
         ELSE bowling_team 
     END;
 
--- ------------------------------------------------------
 -- 2. STANDARDIZE VENUE NAMES
--- ------------------------------------------------------
 UPDATE matches
 SET venue = CASE 
     WHEN venue ILIKE '%Wankhede%' THEN 'Wankhede Stadium, Mumbai'
@@ -72,9 +68,7 @@ SET venue = CASE
     ELSE venue 
 END;
 
--- ------------------------------------------------------
--- 3. BATTING MASTER VIEW (Includes Sync Date)
--- ------------------------------------------------------
+-- 3. BATTING MASTER VIEW (Updated with Not Outs & POTM)
 DROP MATERIALIZED VIEW IF EXISTS view_batter_master CASCADE;
 CREATE MATERIALIZED VIEW view_batter_master AS
 WITH player_latest_team AS (
@@ -92,13 +86,20 @@ true_hs AS (
     CASE WHEN was_dismissed = 0 THEN runs_in_match::text || '*' ELSE runs_in_match::text END as hs_final
     FROM match_scores ORDER BY batter, runs_in_match DESC, was_dismissed ASC
 ),
+potm_counts AS (
+    SELECT player_of_match as player, COUNT(*) as potm_total
+    FROM matches GROUP BY player_of_match
+),
 dismissals AS (
     SELECT player_out as player, COUNT(*) as total_outs
     FROM deliveries WHERE player_out IS NOT NULL GROUP BY player_out
 )
 SELECT 
     d.batter AS player, lt.current_team AS team, MAX(lt.match_date) AS last_match_date,
-    COUNT(DISTINCT d.match_id) AS mat, SUM(d.runs_batter) AS runs, ths.hs_final AS hs, 
+    COUNT(DISTINCT d.match_id) AS mat,
+    (COUNT(DISTINCT d.match_id) - COALESCE(dis.total_outs, 0)) AS not_outs,
+    COALESCE(p.potm_total, 0) AS potm,
+    SUM(d.runs_batter) AS runs, ths.hs_final AS hs, 
     ROUND(SUM(d.runs_batter)::numeric / NULLIF(COALESCE(dis.total_outs, 0), 0), 2) AS avg,
     ROUND((SUM(d.runs_batter)::numeric / NULLIF(COUNT(CASE WHEN extra_type NOT IN ('wides') OR extra_type IS NULL THEN 1 END), 0)) * 100, 2) AS sr,
     SUM(CASE WHEN d.runs_batter = 4 THEN 1 ELSE 0 END) AS "4s",
@@ -109,14 +110,13 @@ FROM deliveries d
 JOIN player_latest_team lt ON d.batter = lt.batter
 JOIN true_hs ths ON d.batter = ths.batter
 LEFT JOIN dismissals dis ON d.batter = dis.player
+LEFT JOIN potm_counts p ON d.batter = p.player
 LEFT JOIN match_scores ms ON d.batter = ms.batter AND d.match_id = ms.match_id
-GROUP BY d.batter, lt.current_team, ths.hs_final, dis.total_outs;
+GROUP BY d.batter, lt.current_team, ths.hs_final, dis.total_outs, p.potm_total;
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_batter_master ON view_batter_master (player);
 
--- ------------------------------------------------------
--- 4. BOWLING MASTER VIEW (Includes Sync Date)
--- ------------------------------------------------------
+-- 4. BOWLING MASTER VIEW
 DROP MATERIALIZED VIEW IF EXISTS view_bowler_master CASCADE;
 CREATE MATERIALIZED VIEW view_bowler_master AS
 WITH player_latest_team AS (
@@ -143,9 +143,20 @@ GROUP BY d.bowler, lt.current_team;
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_bowler_master ON view_bowler_master (player);
 
--- ------------------------------------------------------
--- 5. TEAM RIVALRY VIEW
--- ------------------------------------------------------
+-- 5. NEW: SEASON-BY-SEASON PERFORMANCE VIEW
+DROP MATERIALIZED VIEW IF EXISTS view_player_season_stats;
+CREATE MATERIALIZED VIEW view_player_season_stats AS
+SELECT 
+    d.batter AS player, 
+    m.season, 
+    SUM(d.runs_batter) AS season_runs
+FROM deliveries d
+JOIN matches m ON d.match_id = m.match_id
+GROUP BY d.batter, m.season;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_season_stats ON view_player_season_stats (player, season);
+
+-- 6. TEAM RIVALRY VIEW
 DROP MATERIALIZED VIEW IF EXISTS view_team_rivalry_master CASCADE;
 CREATE MATERIALIZED VIEW view_team_rivalry_master AS
 WITH match_summaries AS (
@@ -176,9 +187,7 @@ FROM match_summaries m;
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_team_rivalry ON view_team_rivalry_master (side_a, side_b);
 
--- ------------------------------------------------------
--- 6. RACE MATRICES (Fixed for Aggregate/Window nesting)
--- ------------------------------------------------------
+-- 7. RACE MATRICES
 DROP MATERIALIZED VIEW IF EXISTS view_player_race_matrix CASCADE;
 CREATE MATERIALIZED VIEW view_player_race_matrix AS
 WITH all_m AS (SELECT match_id, ROW_NUMBER() OVER (ORDER BY match_date, match_id) as global_num FROM matches),
@@ -203,9 +212,7 @@ SELECT player, array_agg(cumulative_wkts ORDER BY global_num) as history FROM ru
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_bowler_race ON view_bowler_race_matrix (player);
 
--- ------------------------------------------------------
--- 7. TOP 30 RACE VIEWS (Optimized for Charts)
--- ------------------------------------------------------
+-- 8. TOP 30 RACE VIEWS
 DROP MATERIALIZED VIEW IF EXISTS view_top_30_batting_race CASCADE;
 CREATE MATERIALIZED VIEW view_top_30_batting_race AS
 WITH unnested_history AS (
@@ -234,21 +241,17 @@ SELECT * FROM ranked_bowling WHERE rank <= 30;
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_top30_bowl ON view_top_30_bowling_race (match_seq, player);
 
--- ------------------------------------------------------
--- 8. INDEXING FOR FAST FILTERING
--- ------------------------------------------------------
+-- 9. INDEXING FOR FAST FILTERING
 CREATE INDEX IF NOT EXISTS idx_batter_runs ON view_batter_master(runs DESC);
 CREATE INDEX IF NOT EXISTS idx_bowler_wkts ON view_bowler_master(wkts DESC);
 
--- ------------------------------------------------------
--- 9. AUTOMATION: RPC FUNCTION FOR PYTHON
--- ------------------------------------------------------
+-- 10. AUTOMATION: RPC FUNCTION FOR PYTHON
 CREATE OR REPLACE FUNCTION refresh_all_ipl_views()
 RETURNS void AS $$
 BEGIN
-    -- Concurrent refresh requires the Unique Indexes created above
     REFRESH MATERIALIZED VIEW CONCURRENTLY view_batter_master;
     REFRESH MATERIALIZED VIEW CONCURRENTLY view_bowler_master;
+    REFRESH MATERIALIZED VIEW CONCURRENTLY view_player_season_stats;
     REFRESH MATERIALIZED VIEW CONCURRENTLY view_team_rivalry_master;
     REFRESH MATERIALIZED VIEW CONCURRENTLY view_player_race_matrix;
     REFRESH MATERIALIZED VIEW CONCURRENTLY view_bowler_race_matrix;

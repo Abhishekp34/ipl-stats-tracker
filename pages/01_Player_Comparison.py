@@ -8,6 +8,17 @@ import plotly.express as px
 # 1. Page Configuration
 st.set_page_config(page_title="Player Comparison | IPL Tracker", layout="wide")
 
+# Custom CSS for centered, professional stat cards
+st.markdown("""
+    <style>
+    .comparison-container { text-align: center; padding: 10px; border-radius: 10px; background-color: #1e1e1e; margin-bottom: 20px; }
+    .stat-label { font-size: 0.8rem; color: #888; text-transform: uppercase; letter-spacing: 1.2px; margin-top: 15px; margin-bottom: 2px; }
+    .stat-value { font-size: 1.6rem; font-weight: bold; color: #F1C40F; margin-bottom: 10px; }
+    .player-header { font-size: 2.2rem; font-weight: bold; color: white; margin-bottom: 20px; border-bottom: 2px solid #333; padding-bottom: 10px; }
+    .team-badge { font-size: 0.9rem; color: #bbb; font-style: italic; }
+    </style>
+""", unsafe_allow_html=True)
+
 # 2. Database Connection
 @st.cache_resource
 def init_connection():
@@ -18,98 +29,132 @@ def init_connection():
 
 supabase = init_connection()
 
-# 3. Data Fetching Functions (Fetching from Materialized Views)
+# 3. Session State for Dynamic Players
+if 'num_players' not in st.session_state:
+    st.session_state.num_players = 2
+
+# 4. Data Fetching
 @st.cache_data(ttl=3600)
 def get_master_data(table_name):
-    # The database already did the hard work (Average, Strike Rate, HS)
     response = supabase.table(table_name).select('*').execute()
     return pd.DataFrame(response.data)
 
-# Load Data
 batters_df = get_master_data('view_batter_master')
 bowlers_df = get_master_data('view_bowler_master')
 
-# 4. UI Header
+# 5. UI Header
 st.title("⚔️ Player Comparison")
-st.markdown("Compare elite performers using **pre-computed, official-grade statistics**.")
+st.markdown("Compare elite performers with centered, side-by-side analytics.")
 
-# 5. Tabs
+# 6. Tabs
 tab1, tab2 = st.tabs(["🏏 Batsmen Comparison", "⚾ Bowlers Comparison"])
+
+# Helper function to render a player column
+def render_player_column(p_data, is_batter=True):
+    with st.container():
+        st.markdown(f"<div class='player-header'>{p_data['player']}</div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='team-badge'>{p_data['team']}</div>", unsafe_allow_html=True)
+        
+        if is_batter:
+            stats = [
+                ("Matches", int(p_data['mat'])),
+                ("Total Runs", f"{int(p_data['runs']):,}"),
+                ("Not Outs", int(p_data['not_outs'])),
+                ("Avg / SR", f"{p_data['avg']} / {p_data['sr']}"),
+                ("Highest Score", p_data['hs']),
+                ("100s / 50s", f"{int(p_data['100s'])} / {int(p_data['50s'])}"),
+                ("4s / 6s", f"{int(p_data['4s'])} / {int(p_data['6s'])}"),
+                ("POTM Awards", int(p_data['potm']))
+            ]
+        else:
+            stats = [
+                ("Matches", int(p_data['mat'])),
+                ("Total Wickets", int(p_data['wkts'])),
+                ("Economy", p_data['econ']),
+                ("Dots", f"{int(p_data['dots']):,}"),
+                ("4w / 5w", f"{int(p_data['4w'])} / {int(p_data['5w'])}")
+            ]
+            
+        for label, value in stats:
+            st.markdown(f"<p class='stat-label'>{label}</p><p class='stat-value'>{value}</p>", unsafe_allow_html=True)
 
 # --- BATSMEN TAB ---
 with tab1:
-    selected_batters = st.multiselect(
-        "Select up to 3 Batters to compare:",
-        options=batters_df['player'].sort_values().unique(),
-        default=["V Kohli", "RG Sharma"] if "V Kohli" in batters_df['player'].values else None,
-        max_selections=3
+    # Selection Area
+    sel_cols = st.columns(st.session_state.num_players)
+    selected_b = []
+    
+    for i in range(st.session_state.num_players):
+        with sel_cols[i]:
+            choice = st.selectbox(f"Select Batter {i+1}", batters_df['player'].sort_values(), key=f"bat_{i}", index=i)
+            selected_b.append(choice)
+    
+    # Add/Remove Player Controls
+    c1, c2, _ = st.columns([1, 1, 4])
+    if st.session_state.num_players < 3:
+        if c1.button("➕ Add Player", key="add_b"):
+            st.session_state.num_players += 1
+            st.rerun()
+    if st.session_state.num_players > 2:
+        if c2.button("➖ Remove", key="rem_b"):
+            st.session_state.num_players -= 1
+            st.rerun()
+
+    st.divider()
+
+    # Comparison Area
+    if selected_b:
+        comp_cols = st.columns(len(selected_b))
+        for i, name in enumerate(selected_b):
+            p_data = batters_df[batters_df['player'] == name].iloc[0]
+            with comp_cols[i]:
+                render_player_column(p_data, is_batter=True)
+    st.divider()
+st.subheader("📈 Season-by-Season Performance")
+
+# Fetch Season Data
+season_res = supabase.table('view_player_season_stats').select('*').in_('player', selected_b).execute()
+season_df = pd.DataFrame(season_res.data)
+
+if not season_df.empty:
+    # Ensure season is sorted chronologically
+    season_df = season_df.sort_values(['season', 'player'])
+    
+    fig_season = px.line(
+        season_df, 
+        x='season', 
+        y='season_runs', 
+        color='player',
+        markers=True,
+        line_shape='spline',
+        template="plotly_dark",
+        labels={'season_runs': 'Runs Scored', 'season': 'Year'},
+        color_discrete_sequence=['#F1C40F', '#E74C3C', '#3498DB'] # Gold, Red, Blue
     )
-
-    if selected_batters:
-        comp_b_df = batters_df[batters_df['player'].isin(selected_batters)]
-        
-        cols = st.columns(len(selected_batters))
-        for i, player in enumerate(selected_batters):
-            p_data = comp_b_df[comp_b_df['player'] == player].iloc[0]
-            with cols[i]:
-                st.subheader(player)
-                # Displaying direct database values
-                st.metric("Total Runs", f"{int(p_data['runs']):,}")
-                st.metric("Avg / SR", f"{p_data['avg']} / {p_data['sr']}")
-                st.write(f"**HS:** {p_data['hs']} | **Team:** {p_data['team']}")
-                st.write(f"**100s/50s:** {int(p_data['100s'])}/{int(p_data['50s'])}")
-                st.write(f"**4s/6s:** {int(p_data['4s'])}/{int(p_data['6s'])}")
-
-        st.divider()
-        # Radar Chart: Metrics normalized to the all-time high for scannability
-        metrics = ['runs', 'sr', 'avg', '4s', '6s']
-        radar_list = []
-        for _, row in comp_b_df.iterrows():
-            for m in metrics:
-                max_val = batters_df[m].max()
-                norm_val = (row[m] / max_val) * 100 if max_val != 0 else 0
-                radar_list.append(dict(Player=row['player'], Metric=m.upper(), Value=norm_val, Actual=row[m]))
-        
-        fig_b = px.line_polar(pd.DataFrame(radar_list), r='Value', theta='Metric', color='Player', 
-                             hover_data=['Actual'], line_close=True, template="plotly_dark", 
-                             title="Relative Batting Strength (Percentile)")
-        fig_b.update_traces(fill='toself', opacity=0.4)
-        st.plotly_chart(fig_b, use_container_width=True)
+    
+    fig_season.update_layout(
+        hovermode="x unified",
+        yaxis=dict(showgrid=False),
+        xaxis=dict(tickmode='linear')
+    )
+    
+    st.plotly_chart(fig_season, use_container_width=True)
 
 # --- BOWLERS TAB ---
 with tab2:
-    selected_bowlers = st.multiselect(
-        "Select up to 3 Bowlers to compare:",
-        options=bowlers_df['player'].sort_values().unique(),
-        default=["JJ Bumrah", "Rashid Khan"] if "JJ Bumrah" in bowlers_df['player'].values else None,
-        max_selections=3
-    )
+    sel_cols_bw = st.columns(st.session_state.num_players)
+    selected_bw = []
+    
+    for i in range(st.session_state.num_players):
+        with sel_cols_bw[i]:
+            choice = st.selectbox(f"Select Bowler {i+1}", bowlers_df['player'].sort_values(), key=f"bowl_{i}", index=i)
+            selected_bw.append(choice)
 
-    if selected_bowlers:
-        comp_bw_df = bowlers_df[bowlers_df['player'].isin(selected_bowlers)]
-        
-        cols_bw = st.columns(len(selected_bowlers))
-        for i, player in enumerate(selected_bowlers):
-            p_data = comp_bw_df[comp_bw_df['player'] == player].iloc[0]
-            with cols_bw[i]:
-                st.subheader(player)
-                st.metric("Wickets", int(p_data['wkts']))
-                st.metric("Economy", p_data['econ'])
-                st.write(f"**Matches:** {int(p_data['mat'])} | **Team:** {p_data['team']}")
-                st.write(f"**4w/5w:** {int(p_data['4w'])}/{int(p_data['5w'])}")
+    st.divider()
 
-        st.divider()
-        # Bowler Metrics
-        bw_metrics = ['wkts', 'mat', 'dots']
-        radar_bw_list = []
-        for _, row in comp_bw_df.iterrows():
-            for m in bw_metrics:
-                max_v = bowlers_df[m].max()
-                norm_v = (row[m] / max_v) * 100 if max_v != 0 else 0
-                radar_bw_list.append(dict(Player=row['player'], Metric=m.upper(), Value=norm_v, Actual=row[m]))
-        
-        fig_bw = px.line_polar(pd.DataFrame(radar_bw_list), r='Value', theta='Metric', color='Player', 
-                              hover_data=['Actual'], line_close=True, template="plotly_dark", 
-                              title="Relative Bowling Strength (Percentile)")
-        fig_bw.update_traces(fill='toself', opacity=0.4)
-        st.plotly_chart(fig_bw, use_container_width=True)
+    if selected_bw:
+        comp_cols_bw = st.columns(len(selected_bw))
+        for i, name in enumerate(selected_bw):
+            p_data = bowlers_df[bowlers_df['player'] == name].iloc[0]
+            with comp_cols_bw[i]:
+                render_player_column(p_data, is_batter=False)
