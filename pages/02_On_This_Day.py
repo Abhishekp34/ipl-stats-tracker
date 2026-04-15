@@ -4,9 +4,11 @@ import datetime
 import os
 from supabase import create_client, Client
 from dotenv import load_dotenv
+from ui_utils import inject_custom_css, styled_stat_card
 
 # 1. Page Config
 st.set_page_config(page_title="On This Day | IPL Tracker", layout="wide")
+inject_custom_css()
 
 # 2. Database Connection
 @st.cache_resource

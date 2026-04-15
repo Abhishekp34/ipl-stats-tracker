@@ -5,102 +5,93 @@ import plotly.express as px
 from supabase import create_client
 from dotenv import load_dotenv
 import time
+from ui_utils import inject_custom_css, get_team_color
 
-# 1. Initialize Connection (Globally defined to fix "supabase is not defined")
+# 1. Page Configuration
+st.set_page_config(page_title="IPL Player Race", layout="wide")
+inject_custom_css()
+
 @st.cache_resource
 def init_connection():
     load_dotenv()
-    url = os.environ.get("SUPABASE_URL")
-    key = os.environ.get("SUPABASE_KEY")
-    return create_client(url, key)
+    return create_client(os.environ.get("SUPABASE_URL"), os.environ.get("SUPABASE_KEY"))
 
 supabase = init_connection()
 
-# 2. Player Color Mapping (Globally defined to fix "PLAYER_COLORS is not defined")
-@st.cache_resource
-def get_player_colors():
-    return {
-        "Virat Kohli": "#E41B17", "MS Dhoni": "#FFFF00", "Rohit Sharma": "#004BA0",
-        "S Dhawan": "#F2A04F", "DA Warner": "#FFD700", "SK Raina": "#FFCC00",
-        "AB de Villiers": "#EC1C24", "CH Gayle": "#339933", "RV Uthappa": "#221E1F"
-    }
-
-PLAYER_COLORS = get_player_colors()
-
-def display_race_plot(container, seq, table, metric_col, category):
-    """Fetches data and renders the sliding bar chart"""
-    res = supabase.table(table).select("player", metric_col) \
-        .eq("match_seq", seq) \
-        .order(metric_col, desc=True) \
-        .limit(10) \
-        .execute()
+@st.cache_data(ttl=3600)
+def fetch_all_race_data(table, metric_col):
+    all_rows = []
+    start = 0
+    step = 5000
     
-    df = pd.DataFrame(res.data)
+    while True:
+        res = supabase.table(table).select("player", "team", "match_seq", metric_col).range(start, start + step - 1).execute()
+        if not res.data:
+            break
+        all_rows.extend(res.data)
+        if len(res.data) < step:
+            break
+        start += step
     
-    if not df.empty:
-        # Highest at top: Plotly Y-axis goes bottom-to-top, 
-        # so we sort ascending=True to put the leader at the top of the screen.
-        df = df.sort_values(metric_col, ascending=True)
-        
-        fig = px.bar(
-            df,
-            x=metric_col,
-            y="player",
-            orientation='h',
-            text=metric_col,
-            color="player",
-            color_discrete_map=PLAYER_COLORS,
-            template="plotly_dark",
-            title=f"IPL {category} - Match #{seq}"
-        )
-        
-        x_limit = 9500 if category == "Batting" else 250
-        
-        fig.update_layout(
-            xaxis_range=[0, x_limit],
-            height=500,
-            showlegend=False,
-            # This 'categoryorder' is what makes the bars swap places smoothly
-            yaxis={'categoryorder':'total ascending'},
-            # Smooth transition duration in milliseconds
-            transition={'duration': 200, 'easing': 'cubic-in-out'},
-            margin=dict(t=50, b=20, l=150, r=50)
-        )
-        
-        # Ensures numbers stay outside the bars for readability
-        fig.update_traces(textposition='outside', cliponaxis=False)
-        
-        container.plotly_chart(fig, use_container_width=True, key=f"race_{category}_{seq}")
+    return pd.DataFrame(all_rows)
 
 def render_race(category):
     table = 'view_top_30_batting_race' if category == "Batting" else 'view_top_30_bowling_race'
     metric_col = 'cumulative_runs' if category == "Batting" else 'cumulative_wickets'
     
-    # 1. DYNAMICALLY get the latest match count
-    count_res = supabase.table(table).select("match_seq", count='exact').order("match_seq", desc=True).limit(1).execute()
-    # Fallback to 1169 if query fails, otherwise get the actual max
-    max_matches = count_res.data[0]['match_seq'] if count_res.data else 1169
+    with st.spinner(f"Fetching full {category} history..."):
+        full_df = fetch_all_race_data(table, metric_col)
+
+    if full_df.empty:
+        st.warning("No data found in the optimized race view.")
+        return
+
+    # Permanent Color Map logic remains the same
+    player_team_map = full_df.sort_values('match_seq').groupby('player')['team'].last().to_dict()
+    color_discrete_map = {p: get_team_color(t) for p, t in player_team_map.items()}
+
+    max_matches = full_df['match_seq'].max()
 
     col1, col2 = st.columns([1, 4])
     with col1:
         play_btn = st.button(f"▶️ Start {category} Race", key=f"play_btn_{category}")
     with col2:
-        # Use max_matches here
         selected_seq = st.slider("Timeline", 1, max_matches, max_matches, key=f"sld_{category}")
 
     chart_holder = st.empty()
 
-    if play_btn:
-        # Loop up to the actual max_matches + 1
-        for i in range(1, max_matches + 1, 5): 
-            display_race_plot(chart_holder, i, table, metric_col, category)
-            time.sleep(0.001) 
-    else:
-        display_race_plot(chart_holder, selected_seq, table, metric_col, category)
-# --- UI EXECUTION ---
-st.set_page_config(page_title="IPL Player Race", layout="wide")
-st.title("🏃 All-Time Player Race")
+    def draw_frame(seq):
+        frame_df = full_df[full_df['match_seq'] == seq].nlargest(10, metric_col).sort_values(metric_col, ascending=True)
+        
+        fig = px.bar(
+            frame_df, x=metric_col, y="player", orientation='h',
+            text=metric_col, color="player",
+            color_discrete_map=color_discrete_map,
+            template="plotly_dark",
+            title=f"IPL {category} - Match #{seq}"
+        )
+        
+        x_limit = full_df[metric_col].max() * 1.05
+        fig.update_layout(
+            xaxis_range=[0, x_limit], height=600, showlegend=False,
+            yaxis={'categoryorder':'total ascending'},
+            transition={'duration': 300, 'easing': 'cubic-in-out'},
+            margin=dict(t=50, b=20, l=150, r=50),
+            plot_bgcolor='rgba(0,0,0,0)',
+            paper_bgcolor='rgba(0,0,0,0)'
+        )
+        fig.update_traces(textposition='outside', cliponaxis=False, marker_line_color='white', marker_line_width=1)
+        chart_holder.plotly_chart(fig, use_container_width=True, key=f"race_plot_{category}_{seq}")
 
+    if play_btn:
+        for i in range(1, max_matches + 1, 2): 
+            draw_frame(i)
+            time.sleep(0.04)
+    else:
+        draw_frame(selected_seq)
+
+# --- UI EXECUTION ---
+st.title("🏃 All-Time Player Race")
 t1, t2 = st.tabs(["🏏 Batting Race", "🎾 Bowling Race"])
 with t1: render_race("Batting")
 with t2: render_race("Bowling")

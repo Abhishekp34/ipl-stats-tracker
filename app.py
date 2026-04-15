@@ -4,9 +4,11 @@ import streamlit as st
 import datetime
 from supabase import create_client, Client
 from dotenv import load_dotenv
+from ui_utils import inject_custom_css, styled_stat_card
 
 # 1. Setup the Page
 st.set_page_config(page_title="The IPL Tracker", layout="wide", page_icon="🏏")
+inject_custom_css()
 
 # 2. Securely connect to Supabase
 @st.cache_resource

@@ -3,9 +3,11 @@ import pandas as pd
 import os
 from supabase import create_client
 from dotenv import load_dotenv
+from ui_utils import inject_custom_css, styled_stat_card
 
 # 1. Page Configuration
 st.set_page_config(page_title="IPL Leaderboards", layout="wide")
+inject_custom_css()
 
 @st.cache_resource
 def init_connection():

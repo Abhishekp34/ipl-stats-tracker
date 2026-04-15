@@ -4,9 +4,11 @@ import os
 from supabase import create_client, Client
 from dotenv import load_dotenv
 import plotly.express as px
+from ui_utils import inject_custom_css, styled_stat_card
 
 # 1. Page Configuration
 st.set_page_config(page_title="Player Comparison | IPL Tracker", layout="wide")
+inject_custom_css()
 
 # Custom CSS for centered, professional stat cards
 st.markdown("""
