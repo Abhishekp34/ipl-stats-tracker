@@ -2,12 +2,8 @@ import streamlit.components.v1 as components
 import json
 
 def d3_bar_chart_race(df, metric_col, category):
-    # Prepare data for JS: Sort by match and then rank
-    # We only need the Top 10 for each match to keep the JS payload light
     data_json = df.to_json(orient='records')
     
-    # Custom Javascript with D3.js logic
-    # This handles the physical sliding and swapping of bars
     custom_js = f"""
     <div id="d3-race-container" style="background: transparent;"></div>
     <script src="https://d3js.org/d3.v6.min.js"></script>
@@ -16,15 +12,15 @@ def d3_bar_chart_race(df, metric_col, category):
         const metric = "{metric_col}";
         const width = 1000;
         const height = 600;
-        const margin = {{top: 50, right: 80, bottom: 20, left: 120}};
+        const margin = {{top: 50, right: 100, bottom: 20, left: 150}};
         const barSize = 45;
-        const n = 10; // Top 10 players
-        const duration = 250; // Smoothness of swap (ms)
+        const n = 10; 
+        const duration = 50; 
 
         const teamColors = {{
             'Chennai Super Kings': '#FDB913',
             'Mumbai Indians': '#004BA0',
-            'Royal Challengers Bengaluru': '#2B2A29',
+            'Royal Challengers Bengaluru': '#EC1C24',
             'Kolkata Knight Riders': '#3A225D',
             'Delhi Capitals': '#00008B',
             'Punjab Kings': '#DD1F2D',
@@ -37,14 +33,14 @@ def d3_bar_chart_race(df, metric_col, category):
 
         async function render() {{
             const div = d3.select("#d3-race-container");
-            div.selectAll("*").remove(); // Clear previous if any
+            div.selectAll("*").remove(); 
             
             const svg = div.append("svg")
                 .attr("viewBox", [0, 0, width, height])
                 .style("overflow", "visible")
                 .style("display", "block");
 
-            const x = d3.scaleLinear([0, 1], [margin.left, width - margin.right]);
+            const x = d3.scaleLinear([0, d3.max(data, d => d[metric])], [margin.left, width - margin.right]);
             const y = d3.scaleBand()
                 .domain(d3.range(n + 1))
                 .rangeRound([margin.top, margin.top + barSize * (n + 1)])
@@ -53,15 +49,14 @@ def d3_bar_chart_race(df, metric_col, category):
             const formatNumber = d3.format(",d");
             const matches = Array.from(new Set(data.map(d => d.match_seq))).sort((a,b) => a-b);
             
-            // Initial Axis
             const xAxis = svg.append("g")
                 .attr("transform", `translate(0,${{margin.top}})`)
+                .style("color", "rgba(255,255,255,0.5)")
                 .call(d3.axisTop(x).ticks(width / 160).tickSizeOuter(0).tickSizeInner(-barSize * (n + 1)));
 
             const ticker = svg.append("text")
-                .attr("class", "match-ticker")
                 .style("font", "bold 34px sans-serif")
-                .style("fill", "rgba(255,255,255,0.2)")
+                .style("fill", "rgba(255,255,255,0.15)")
                 .attr("text-anchor", "end")
                 .attr("x", width - margin.right)
                 .attr("y", height - margin.bottom)
@@ -72,66 +67,66 @@ def d3_bar_chart_race(df, metric_col, category):
                     .sort((a, b) => b[metric] - a[metric])
                     .slice(0, n);
                 
-                x.domain([0, d3.max(data, d => d[metric])]);
-
-                // Update Axis
+                // Update X-axis range smoothly
                 xAxis.transition().duration(duration).ease(d3.easeLinear).call(d3.axisTop(x));
 
-                // BARS
-                const bar = svg.selectAll(".bar")
-                    .data(frameData, d => d.player);
-
-                bar.enter().append("rect")
-                    .attr("class", "bar")
-                    .attr("fill", d => teamColors[d.team] || '#808080')
-                    .attr("x", x(0))
-                    .attr("y", y(n))
-                    .attr("height", y.bandwidth())
-                    .style("opacity", 0.9)
-                    .attr("rx", 4)
-                    .merge(bar)
+                // 1. BARS JOIN (Fixes Overlap)
+                svg.selectAll(".bar")
+                    .data(frameData, d => d.player)
+                    .join(
+                        enter => enter.append("rect")
+                            .attr("class", "bar")
+                            .attr("fill", d => teamColors[d.team] || '#808080')
+                            .attr("x", x(0))
+                            .attr("y", y(n))
+                            .attr("height", y.bandwidth())
+                            .attr("rx", 4)
+                            .style("opacity", 0.9),
+                        update => update,
+                        exit => exit.transition().duration(duration).attr("width", 0).remove()
+                    )
                     .transition().duration(duration).ease(d3.easeLinear)
                     .attr("y", (d, i) => y(i))
                     .attr("width", d => x(d[metric]) - x(0));
 
-                bar.exit().transition().duration(duration).ease(d3.easeLinear)
-                    .attr("y", y(n))
-                    .attr("width", 0).remove();
-
-                // NAMES
-                const labels = svg.selectAll(".label")
-                    .data(frameData, d => d.player);
-                
-                labels.enter().append("text")
-                    .attr("class", "label")
-                    .attr("x", margin.left - 10)
-                    .attr("y", y(n))
-                    .attr("dy", "1.15em")
-                    .attr("text-anchor", "end")
-                    .style("fill", "white")
-                    .style("font", "bold 13px sans-serif")
+                // 2. PLAYER NAMES JOIN
+                svg.selectAll(".label")
+                    .data(frameData, d => d.player)
+                    .join(
+                        enter => enter.append("text")
+                            .attr("class", "label")
+                            .attr("x", margin.left - 10)
+                            .attr("y", y(n))
+                            .attr("dy", "1.15em")
+                            .attr("text-anchor", "end")
+                            .style("fill", "white")
+                            .style("font", "bold 13px sans-serif"),
+                        update => update,
+                        exit => exit.remove()
+                    )
                     .text(d => d.player)
-                    .merge(labels)
                     .transition().duration(duration).ease(d3.easeLinear)
                     .attr("y", (d, i) => y(i));
 
-                // VALUES
-                const values = svg.selectAll(".value-label")
-                    .data(frameData, d => d.player);
-
-                values.enter().append("text")
-                    .attr("class", "value-label")
-                    .attr("x", x(0))
-                    .attr("y", y(n))
-                    .attr("dy", "1.15em")
-                    .attr("dx", 5)
-                    .style("fill", "white")
-                    .style("font", "bold 12px monospace")
-                    .merge(values)
+                // 3. SCORE VALUES JOIN
+                svg.selectAll(".value-label")
+                    .data(frameData, d => d.player)
+                    .join(
+                        enter => enter.append("text")
+                            .attr("class", "value-label")
+                            .attr("x", x(0))
+                            .attr("y", y(n))
+                            .attr("dy", "1.15em")
+                            .attr("dx", 5)
+                            .style("fill", "rgba(255,255,255,0.9)")
+                            .style("font", "bold 12px monospace"),
+                        update => update,
+                        exit => exit.remove()
+                    )
+                    .text(d => formatNumber(d[metric]))
                     .transition().duration(duration).ease(d3.easeLinear)
                     .attr("x", d => x(d[metric]))
-                    .attr("y", (d, i) => y(i))
-                    .text(d => formatNumber(d[metric]));
+                    .attr("y", (d, i) => y(i));
 
                 ticker.text(`Match #${{seq}}`);
                 
@@ -141,8 +136,8 @@ def d3_bar_chart_race(df, metric_col, category):
         render();
     </script>
     <style>
-        .tick line {{ stroke: rgba(255,255,255,0.1); }}
-        .tick text {{ fill: rgba(255,255,255,0.5); font-size: 10px; }}
+        .tick line {{ stroke: rgba(255,255,255,0.05); }}
+        .tick text {{ font-size: 10px; }}
         path.domain {{ display: none; }}
     </style>
     """
