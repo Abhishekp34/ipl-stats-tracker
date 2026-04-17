@@ -1,14 +1,16 @@
 # 🏏 IPL Stats Tracker (2008 - 2025)
 
+**🌟 Check it out live at: [theipltracker.com](http://www.theipltracker.com)**
+
 An interactive, high-performance web application built with **Streamlit** and **Supabase** that provides deep insights into Indian Premier League history. This project leverages Materialized Views and advanced SQL to deliver real-time leaderboards and animated player progression races.
 
 ## 🚀 Features
 
 ### 1. 🏃 All-Time Player Race (New!)
-* **Animated Bar Chart Race:** Watch the top 10 run-scorers and wicket-takers evolve match-by-match from 2008 to 2024.
-* **Smooth Transitions:** Optimized using CSS-style transitions and `st.empty` containers to ensure bars slide past each other during rank changes.
-* **Dedicated Player Colors:** Top legends (Kohli, Dhoni, Rohit, etc.) have fixed colors for easy tracking.
-* **Interactive Timeline:** Manually seek to any of the 1,100+ matches or hit "Play" for an automated experience.
+* **Animated Bar Chart Race:** Watch the top 10 run-scorers and wicket-takers evolve match-by-match.
+* **Smooth Transitions:** Optimized using **D3.js** embedded within Streamlit to ensure bars slide past each other smoothly during rank changes.
+* **Dedicated Team Colors:** Players' bars are dynamically colored based on the franchise they are representing.
+* **Automated Timeline:** Hit the launch button for an automated, broadcast-quality experience.
 
 ### 2. 🏆 Dynamic Leaderboards
 * **Real-time Rankings:** Global batting and bowling master tables updated via Supabase Materialized Views.
@@ -69,7 +71,7 @@ Key Views:
 
 5. **Run the App:**
    ```bash
-   streamlit run Home.py
+   streamlit run app.py
    ```
 
 ---
@@ -77,6 +79,9 @@ Key Views:
 ## 📈 Roadmap
 - [x] Animated Player Race
 - [x] Global Leaderboards
+- [x] Player Comparison Tool
+- [x] Player Profiles
+- [x] On This Day (Historic Matches)
 - [ ] Toss Impact Analysis
 - [ ] Win Probability Predictor
 - [ ] Player Comparison Tool
