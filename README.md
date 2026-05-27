@@ -84,6 +84,5 @@ Key Views:
 - [x] On This Day (Historic Matches)
 - [ ] Toss Impact Analysis
 - [ ] Win Probability Predictor
-- [ ] Player Comparison Tool
 
 ---
